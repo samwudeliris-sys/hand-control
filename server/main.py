@@ -26,12 +26,32 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import platform
 import socket
 import subprocess
+import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+
+
+def _fail_fast_if_wrong_platform() -> None:
+    """Hand Control uses AppleScript, CoreGraphics, and CGEventTap — all
+    macOS-only. Fail with a clear, friendly message if we're elsewhere,
+    rather than letting the user hit a cryptic `ImportError` on pyobjc.
+    """
+    if platform.system() != "Darwin":
+        sys.stderr.write(
+            "\nHand Control only runs on macOS.\n"
+            "It drives AppleScript, CoreGraphics, and CGEventTap, which are\n"
+            f"Apple-only APIs. Current platform: {platform.system()}.\n\n"
+        )
+        sys.exit(1)
+
+
+_fail_fast_if_wrong_platform()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
@@ -365,8 +385,39 @@ def _check_accessibility() -> bool:
         return False
 
 
+def _resolve_port() -> int:
+    raw = os.environ.get("PORT", "8000").strip()
+    try:
+        port = int(raw)
+    except ValueError:
+        sys.stderr.write(f"PORT must be a number, got: {raw!r}\n")
+        sys.exit(1)
+    if not (1 <= port <= 65535):
+        sys.stderr.write(f"PORT out of range: {port}\n")
+        sys.exit(1)
+    return port
+
+
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            return True
+    return False
+
+
 def main() -> None:
     import uvicorn
+
+    port = _resolve_port()
+    if _port_in_use(port):
+        sys.stderr.write(
+            f"\nPort {port} is already in use.\n"
+            f"  • If Hand Control is already running, just use that instance.\n"
+            f"  • Otherwise run on another port:  PORT=8080 ./run.sh\n\n"
+        )
+        sys.exit(1)
 
     ip = get_lan_ip()
     hostname = get_mdns_hostname()
@@ -376,13 +427,13 @@ def main() -> None:
     print("  Hand Control running.")
     print()
     if hostname:
-        print(f"  Phone URL (stable):  http://{hostname}:8000")
-        print(f"  Phone URL (by IP):   http://{ip}:8000")
+        print(f"  Phone URL (stable):  http://{hostname}:{port}")
+        print(f"  Phone URL (by IP):   http://{ip}:{port}")
         print()
         print(f"  Bookmark the stable URL on your phone — the .local")
         print(f"  hostname won't change when your Wi-Fi does.")
     else:
-        print(f"  Phone URL:  http://{ip}:8000")
+        print(f"  Phone URL:  http://{ip}:{port}")
     print("=" * 64)
     if trusted:
         print("  Accessibility: OK (precise Enter timing enabled)")
@@ -392,7 +443,16 @@ def main() -> None:
         print("    Enable your terminal app, then restart this server.")
         print("  Using hold-duration heuristic for Enter timing until then.")
     print("=" * 64 + "\n")
-    uvicorn.run("server.main:app", host="0.0.0.0", port=8000, log_level="info")
+
+    try:
+        uvicorn.run(
+            "server.main:app",
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+        )
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

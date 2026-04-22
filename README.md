@@ -9,11 +9,29 @@ Turn your phone into a touch-screen remote that lets you:
 3. Press-and-hold a big button on your phone to dictate into it.
 4. Let go — Wispr Flow transcribes and types into the window.
 5. When it's done, two buttons at the bottom of your phone light up:
-   - **Submit** → presses Enter
+   - **Submit** → presses Option+Enter (queues the message in Cursor)
    - **Delete** → presses Cmd+Z (undoes the dictation)
 
 Your AirPods (connected to your Mac) are still the mic. The phone is just a
 remote control — **no audio ever goes over the network**.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/samwudeliris-sys/hand-control.git
+cd hand-control
+./run.sh
+```
+
+On first run, grant **Accessibility** and **Automation** permissions when
+macOS prompts (full details in [Setup](#setup)), then open the `.local`
+URL the server prints on your phone. Add it to your home screen and you
+have a landscape remote control app for dictating into Cursor.
+
+**Requires:** macOS, Python 3.10+, Cursor, Wispr Flow (or any hold-to-talk
+dictation tool), and a phone on the same Wi-Fi.
 
 ---
 
@@ -257,6 +275,18 @@ with another app name (e.g., `"Code"` for VS Code, `"iTerm2"` for iTerm).
 The server is Wispr-agnostic. Any dictation tool that activates on a hold
 hotkey and types into the focused window works.
 
+### Run on a different port
+
+Port 8000 is the default. To override:
+
+```bash
+PORT=8080 ./run.sh
+```
+
+The startup banner updates to show the new URL. If port 8000 is already
+in use, the server exits with a friendly message telling you to pick
+another port.
+
 ---
 
 ## Troubleshooting
@@ -277,6 +307,11 @@ and enable "System Events" under your terminal.
 Make sure both devices are on the same Wi-Fi. Some guest / corporate
 networks isolate clients — try a personal hotspot to confirm. macOS
 firewall may also need to allow incoming connections to Python.
+
+**Server says "Port 8000 is already in use."**
+Another process is bound to that port (possibly a stale Hand Control).
+Either stop the other process or pick a new port:
+`PORT=8080 ./run.sh`.
 
 **The `.local` URL doesn't resolve on my phone.**
 Some networks block mDNS / Bonjour between clients. Fall back to the IP
