@@ -102,7 +102,7 @@ to plain Enter.
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/<you>/hand-control.git
+git clone https://github.com/samwudeliris-sys/hand-control.git
 cd hand-control
 ./run.sh
 ```
