@@ -141,6 +141,64 @@
     font-style: italic;
   }
 
+  /* Preset strip — thin row of one-tap canned-prompt pills, below
+     the project boxes. Horizontally scrollable so users with lots
+     of presets can swipe through them. */
+  .presets {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 6px;
+    padding: 0 max(14px, env(safe-area-inset-right))
+            max(8px, calc(env(safe-area-inset-bottom) * 0.1))
+            max(14px, env(safe-area-inset-left));
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    border-bottom: 1px solid #0e0e0e;
+    background: #050505;
+    touch-action: pan-x;  /* horizontal scroll OK, no pinch/zoom */
+    min-height: 0;
+  }
+  .presets::-webkit-scrollbar { display: none; }
+  .presets.hidden { display: none; }
+
+  .preset {
+    flex: 0 0 auto;
+    padding: 7px 13px;
+    margin: 6px 0;
+    border-radius: 999px;
+    background: #121212;
+    border: 1px solid #1d1d1d;
+    color: #c8c8c8;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    transition: background 0.08s, color 0.08s, transform 0.08s, border-color 0.12s;
+    cursor: pointer;
+  }
+  .preset:active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--fg);
+    transform: scale(0.96);
+  }
+  .preset.firing {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+  }
+  .preset.flash-ok {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green);
+  }
+  .preset.flash-err {
+    background: var(--red-dim);
+    border-color: var(--red);
+    color: var(--red);
+  }
+
   /* Main row */
   main {
     flex: 1;
@@ -416,6 +474,8 @@
     </div>
   </header>
 
+  <div class="presets hidden" id="presets"></div>
+
   <main>
     <div class="edge" id="edgeLeft">◀</div>
 
@@ -450,6 +510,7 @@
 <script>
 (() => {
   const boxesEl = document.getElementById('boxes');
+  const presetsEl = document.getElementById('presets');
   const projectEl = document.getElementById('project');
   const hintEl = document.getElementById('hint');
   const holdEl = document.getElementById('hold');
@@ -469,6 +530,7 @@
   let reconnectDelay = 500;
   let windows = [];
   let selected = -1;
+  let presets = [];
   let wakeLock = null;
 
   // State machine: 'idle' | 'holding' | 'waiting' | 'ready' | 'sent'
@@ -516,7 +578,15 @@
         if (msg.type === 'state') {
           windows = msg.windows || [];
           selected = msg.selected;
+          // Presets are part of the state snapshot — re-render if the
+          // server reloaded them (e.g. restart with new presets.json).
+          const nextPresets = msg.presets || [];
+          const changed = JSON.stringify(nextPresets) !== JSON.stringify(presets);
+          presets = nextPresets;
           renderBoxes();
+          if (changed) renderPresets();
+        } else if (msg.type === 'preset_result') {
+          flashPreset(msg.id, !!msg.ok);
         } else if (msg.type === 'focus_status') {
           // Server tells us right after we press hold whether the
           // Cursor window has a focused text field. Surface as a
@@ -527,6 +597,11 @@
           lastTranscription = (msg.text || '').trim();
           lastHadTextField = msg.had_text_field !== false;
           lastAutoSubmitted = msg.auto_submitted === true;
+          // If we ended up with a transcription, there was obviously a
+          // usable field — drop any stale warning chip from hold_start.
+          if (lastTranscription || lastAutoSubmitted) {
+            focusWarnEl.classList.remove('show');
+          }
           if (mode === 'waiting') {
             setMode(lastAutoSubmitted ? 'sent' : 'ready');
           }
@@ -613,6 +688,66 @@
   }
 
   // ----- Rendering -----
+  function renderPresets() {
+    presetsEl.innerHTML = '';
+    if (!presets.length) {
+      presetsEl.classList.add('hidden');
+      return;
+    }
+    presetsEl.classList.remove('hidden');
+    presets.forEach((p) => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'preset';
+      el.dataset.presetId = p.id;
+      el.textContent = p.label;
+      // Small hint in the title attribute — useful when debugging
+      // from desktop, invisible on phone.
+      el.title = `${p.label} (${p.submit})`;
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        firePreset(p);
+      });
+      presetsEl.appendChild(el);
+    });
+  }
+
+  function firePreset(p) {
+    // Ignore while holding to talk — the user is clearly doing
+    // something else. Any pending post-dictation state gets cleared
+    // so the preset flash is the primary feedback.
+    if (mode === 'holding') return;
+    if (mode === 'waiting' || mode === 'ready' || mode === 'sent') {
+      setMode('idle');
+    }
+    if (!windows.length) return;
+
+    const el = presetsEl.querySelector(`.preset[data-preset-id="${cssEscape(p.id)}"]`);
+    if (el) {
+      el.classList.remove('flash-ok', 'flash-err');
+      el.classList.add('firing');
+    }
+    send({ type: 'preset', id: p.id });
+  }
+
+  function flashPreset(id, ok) {
+    const el = presetsEl.querySelector(`.preset[data-preset-id="${cssEscape(id)}"]`);
+    if (!el) return;
+    el.classList.remove('firing');
+    el.classList.add(ok ? 'flash-ok' : 'flash-err');
+    setTimeout(() => {
+      el.classList.remove('flash-ok', 'flash-err');
+    }, 900);
+  }
+
+  // Small CSS selector escape helper — preset ids are slugified server-
+  // side but we still sanitize for safety (ids could come from a
+  // user-edited JSON file).
+  function cssEscape(s) {
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
+  }
+
   function renderBoxes() {
     if (windows.length === 0 || selected < 0) {
       projectEl.textContent = 'No Cursor windows';
@@ -713,6 +848,7 @@
   document.addEventListener('contextmenu', (e) => e.preventDefault());
 
   setMode('idle');
+  renderPresets();
   connect();
 })();
 </script>

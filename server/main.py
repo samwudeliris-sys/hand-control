@@ -53,6 +53,15 @@ def _fail_fast_if_wrong_platform() -> None:
 
 _fail_fast_if_wrong_platform()
 
+# Make stdout / stderr line-buffered so our diagnostic prints (startup
+# banner, debug logs, etc.) appear immediately even when the server is
+# launched via a wrapper that pipes stdout into a file or terminal tail.
+try:
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+except Exception:
+    pass
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -65,8 +74,10 @@ from .key_control import (
     press_option_enter,
     right_option_down,
     right_option_up,
+    type_string,
 )
 from .keystroke_watcher import KeystrokeWatcher
+from .presets import Preset, load_presets
 
 PHONE_DIR = Path(__file__).resolve().parent.parent / "phone"
 POLL_INTERVAL_S = 1.0
@@ -100,6 +111,14 @@ class State:
         self.lock = asyncio.Lock()
         self.hold_start_ts: Optional[float] = None
         self.baseline_focus: Optional[FocusSnapshot] = None
+        # Presets are loaded once at startup. Users who edit
+        # presets.json while the server is running can restart to pick
+        # up changes.
+        self.presets: list[Preset] = load_presets()
+        self._presets_by_id: dict[str, Preset] = {p.id: p for p in self.presets}
+
+    def preset(self, preset_id: str) -> Optional[Preset]:
+        return self._presets_by_id.get(preset_id)
 
     def _selected_index(self) -> int:
         if not self.windows:
@@ -123,6 +142,9 @@ class State:
                 {"title": w.title, "project": w.project} for w in self.windows
             ],
             "selected": self._selected_index(),
+            # Send only the public-safe view (id, label, submit mode) —
+            # the actual prompt text stays server-side.
+            "presets": [p.to_public_dict() for p in self.presets],
         }
 
 
@@ -192,6 +214,13 @@ async def handle_hold_start() -> None:
             "role": state.baseline_focus.role,
         }
     )
+
+    # Begin capturing keystrokes from this moment on. Anything Wispr
+    # types after we release Right Option will land in the watcher's
+    # capture buffer — robust against Electron / WebKit fields whose
+    # AX value isn't readable, and against Wispr's "press enter"
+    # clearing the field before we can snapshot it.
+    state.watcher.start_capture(state.hold_start_ts)
 
     right_option_down()
 
@@ -272,13 +301,37 @@ async def handle_hold_end() -> None:
         _wait_and_capture, release_ts, hold_duration
     )
 
+    # Two sources of transcription text, in priority order:
+    #   1. Characters recorded by the CGEventTap while Wispr was typing.
+    #      This survives Electron fields that don't expose AXValue and
+    #      Wispr's "press enter" which clears the input instantly.
+    #   2. AX diff of the focused field before vs after dictation.
+    #      Used as a fallback — only seen when the event tap captured
+    #      nothing (e.g. Wispr pasted rather than typed).
+    captured_keystrokes = state.watcher.stop_capture().strip()
     baseline = state.baseline_focus or FocusSnapshot.empty()
-    transcription = compute_transcription(baseline.text, final_text)
+    ax_transcription = compute_transcription(baseline.text, final_text)
+    transcription = captured_keystrokes or ax_transcription
 
-    # If Wispr auto-submitted, the field is probably cleared now so AX
-    # reads as "no text field" — but we know the baseline had one, so
-    # trust that for the user's status display.
-    had_text_field = baseline.has_text_field or bool(transcription)
+    # Text field detection: treat as True if *any* signal says so —
+    # baseline AX check, keystrokes actually landing somewhere, or the
+    # AX diff producing a transcription. Electron apps regularly
+    # confuse the AX snapshot, so we err on the side of "user knows
+    # best" and only warn when nothing at all happened.
+    had_text_field = (
+        baseline.has_text_field
+        or bool(captured_keystrokes)
+        or bool(ax_transcription)
+        or auto_submitted
+    )
+
+    print(
+        f"[transcription] keystrokes={captured_keystrokes!r} "
+        f"ax={ax_transcription!r} "
+        f"auto_submit={auto_submitted} "
+        f"had_text_field={had_text_field}",
+        flush=True,
+    )
 
     await broadcast(
         {
@@ -299,6 +352,61 @@ async def handle_submit() -> None:
 
 async def handle_delete() -> None:
     press_cmd_z()
+
+
+async def handle_preset(preset_id: str) -> None:
+    """One-tap preset: focus the selected Cursor window, type the canned
+    prompt into its focused input, then submit / queue / do nothing per
+    the preset's ``submit`` mode."""
+    preset = state.preset(preset_id)
+    if preset is None:
+        print(f"[preset] unknown id: {preset_id!r}")
+        return
+
+    win = state.selected_window()
+    if win is None:
+        print(f"[preset] no selected window; ignoring {preset.label!r}")
+        await broadcast(
+            {
+                "type": "preset_result",
+                "id": preset.id,
+                "ok": False,
+                "reason": "no_window",
+            }
+        )
+        return
+
+    focus_window(win.title)
+    # Let the WM actually transfer focus before we start firing keys.
+    await asyncio.sleep(0.12)
+
+    # Typing is blocking (~4ms per char × message length). Run in a
+    # worker thread so the event loop stays responsive and other
+    # clients (or another preset tap) don't queue up behind it.
+    await asyncio.to_thread(type_string, preset.text)
+
+    # Small beat so the app registers all typed chars before we submit.
+    await asyncio.sleep(0.05)
+
+    if preset.submit == "queue":
+        press_option_enter()
+    elif preset.submit == "send":
+        press_enter()
+    # "none" → just leave the text in the field
+
+    print(
+        f"[preset] {preset.label!r} → window={win.project!r} "
+        f"submit={preset.submit} chars={len(preset.text)}"
+    )
+    await broadcast(
+        {
+            "type": "preset_result",
+            "id": preset.id,
+            "ok": True,
+            "submit": preset.submit,
+            "window": win.project,
+        }
+    )
 
 
 async def handle_select(index: int) -> None:
@@ -384,6 +492,25 @@ async def favicon() -> FileResponse:
     return FileResponse(PHONE_DIR / "icon-192.png", media_type="image/png")
 
 
+@app.get("/presets")
+async def presets_endpoint() -> dict:
+    """Inspect the loaded presets (handy when debugging a custom
+    ``presets.json``). Includes ``text`` for local debugging since the
+    server only listens on the LAN."""
+    return {
+        "count": len(state.presets),
+        "presets": [
+            {
+                "id": p.id,
+                "label": p.label,
+                "text": p.text,
+                "submit": p.submit,
+            }
+            for p in state.presets
+        ],
+    }
+
+
 app.mount("/static", StaticFiles(directory=str(PHONE_DIR)), name="static")
 
 
@@ -416,6 +543,10 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 idx = msg.get("index")
                 if isinstance(idx, int):
                     await handle_select(idx)
+            elif kind == "preset":
+                pid = msg.get("id")
+                if isinstance(pid, str):
+                    await handle_preset(pid)
             elif kind == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
     except WebSocketDisconnect:
@@ -488,7 +619,14 @@ def _resolve_port() -> int:
 
 
 def _port_in_use(port: int) -> bool:
+    """Check whether ``port`` is actually bound by a live listener.
+
+    We mirror uvicorn's own socket setup (``SO_REUSEADDR``) so a recently-
+    closed socket still in ``TIME_WAIT`` doesn't trigger a false
+    "port in use" error.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("0.0.0.0", port))
         except OSError:

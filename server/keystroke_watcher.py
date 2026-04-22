@@ -20,6 +20,7 @@ from Quartz import (
     CFRunLoopGetCurrent,
     CFRunLoopRun,
     CGEventGetIntegerValueField,
+    CGEventKeyboardGetUnicodeString,
     CGEventMaskBit,
     CGEventTapCreate,
     CGEventTapEnable,
@@ -36,6 +37,17 @@ from Quartz import (
 _KEYCODE_RETURN = 36
 # Numeric keypad Enter — some apps / dictation tools use this variant.
 _KEYCODE_KEYPAD_ENTER = 76
+# Navigation / editing keys whose "characters" would pollute the
+# captured transcription if we included them verbatim.
+_NON_CHAR_KEYCODES = {
+    _KEYCODE_RETURN,
+    _KEYCODE_KEYPAD_ENTER,
+    48,   # Tab
+    51,   # Delete / Backspace
+    53,   # Escape
+    117,  # Forward delete
+    123, 124, 125, 126,  # Arrow keys
+}
 
 
 class KeystrokeWatcher:
@@ -56,6 +68,13 @@ class KeystrokeWatcher:
         self._tap = None
         self._started = False
         self.active: bool = False  # True once CGEventTap is running
+        # Character-capture state. Callers start/stop capture around a
+        # dictation window; everything typed in between accumulates in
+        # ``_captured``. This lets us recover the transcription text
+        # even when Wispr's "press enter" command clears the text field
+        # before our AX poller can read it.
+        self._capture_since: Optional[float] = None
+        self._captured: list[str] = []
 
     @property
     def last_keydown_ts(self) -> float:
@@ -67,6 +86,54 @@ class KeystrokeWatcher:
         with self._lock:
             return self._last_return_ts > ts
 
+    def start_capture(self, since_ts: float) -> None:
+        """Begin accumulating typed characters from ``since_ts`` onward."""
+        with self._lock:
+            self._capture_since = since_ts
+            self._captured = []
+
+    def stop_capture(self) -> str:
+        """Stop accumulating and return the captured text."""
+        with self._lock:
+            self._capture_since = None
+            text = "".join(self._captured)
+            self._captured = []
+            return text
+
+    def _extract_char(self, event) -> str:
+        """Return the Unicode string produced by the given keydown event,
+        respecting modifiers. Returns empty string for pure modifier/
+        navigation keys that don't type anything visible.
+        """
+        try:
+            # Returns (actualStringLength, unicodeString) — pyobjc turns
+            # the C out-params into a tuple. The buffer comes back as
+            # either a Python str or a tuple of ints (UniChar codepoints),
+            # depending on pyobjc version.
+            result = CGEventKeyboardGetUnicodeString(event, 16, None, None)
+        except Exception:
+            return ""
+        if not result:
+            return ""
+        length = result[0] if len(result) >= 1 else 0
+        chars = result[1] if len(result) >= 2 else None
+        if not chars or length <= 0:
+            return ""
+
+        if isinstance(chars, str):
+            s = chars[:length]
+        else:
+            try:
+                s = "".join(
+                    chr(c) if isinstance(c, int) else str(c)
+                    for c in chars[:length]
+                )
+            except Exception:
+                return ""
+        # Filter out stray control characters that slip through
+        # (\b, \x7f, etc.) while keeping regular printable Unicode.
+        return "".join(c for c in s if c >= " " or c in ("\n", "\t"))
+
     def _callback(self, proxy, type_, event, refcon):
         now = time.monotonic()
         try:
@@ -75,10 +142,23 @@ class KeystrokeWatcher:
             )
         except Exception:
             keycode = -1
+
+        char = ""
+        if keycode not in _NON_CHAR_KEYCODES:
+            char = self._extract_char(event)
+
         with self._lock:
             self._last_ts = now
             if keycode in (_KEYCODE_RETURN, _KEYCODE_KEYPAD_ENTER):
                 self._last_return_ts = now
+            # Append typed characters only while a capture window is
+            # open and only for events after the capture-start time.
+            if (
+                self._capture_since is not None
+                and now >= self._capture_since
+                and char
+            ):
+                self._captured.append(char)
         return event
 
     def _run(self) -> None:

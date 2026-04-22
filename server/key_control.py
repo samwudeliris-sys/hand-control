@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import time
+
 from Quartz import (
     CGEventCreateKeyboardEvent,
+    CGEventKeyboardSetUnicodeString,
     CGEventPost,
     CGEventSetFlags,
     kCGEventFlagMaskAlternate,
@@ -14,6 +17,11 @@ from Quartz import (
 KEYCODE_RIGHT_OPTION = 61
 KEYCODE_RETURN = 36
 KEYCODE_Z = 6  # kVK_ANSI_Z
+
+# Tiny gap between synthesized keystrokes when typing a string. Most apps
+# handle bursts fine, but Electron chat inputs (Cursor, VSCode) can drop
+# characters if we fire them all at once in the same tick.
+_TYPE_DELAY_S = 0.004
 
 
 def _post(keycode: int, is_down: bool, flags: int = 0) -> None:
@@ -51,3 +59,24 @@ def press_cmd_z() -> None:
     """Simulate Cmd+Z to undo the last Wispr Flow insertion."""
     _post(KEYCODE_Z, True, flags=kCGEventFlagMaskCommand)
     _post(KEYCODE_Z, False, flags=kCGEventFlagMaskCommand)
+
+
+def type_string(text: str) -> None:
+    """Type ``text`` into the currently-focused UI element.
+
+    Uses ``CGEventKeyboardSetUnicodeString`` so any Unicode character
+    can be emitted without caring about physical keycodes or keyboard
+    layout. A tiny delay between characters prevents Electron-based
+    chat inputs (Cursor) from dropping fast bursts.
+    """
+    for ch in text:
+        down = CGEventCreateKeyboardEvent(None, 0, True)
+        CGEventKeyboardSetUnicodeString(down, 1, ch)
+        CGEventPost(kCGHIDEventTap, down)
+
+        up = CGEventCreateKeyboardEvent(None, 0, False)
+        CGEventKeyboardSetUnicodeString(up, 1, ch)
+        CGEventPost(kCGHIDEventTap, up)
+
+        if _TYPE_DELAY_S > 0:
+            time.sleep(_TYPE_DELAY_S)

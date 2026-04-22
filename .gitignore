@@ -2,3 +2,9 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# User-local preset overrides — defaults are baked into the Python
+# code and presets.example.json is the reference file. If you want
+# to customize presets without conflicting on git pulls, copy the
+# example to presets.json and edit freely.
+presets.json

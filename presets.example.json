@@ -1,0 +1,32 @@
+[
+  {
+    "label": "Push",
+    "text": "commit all changes with a clear, concise message and push to github",
+    "submit": "queue"
+  },
+  {
+    "label": "Continue",
+    "text": "continue",
+    "submit": "send"
+  },
+  {
+    "label": "Fix",
+    "text": "please fix it",
+    "submit": "send"
+  },
+  {
+    "label": "Tests",
+    "text": "run the tests and fix any failures",
+    "submit": "queue"
+  },
+  {
+    "label": "Plan",
+    "text": "before making changes, lay out a short step-by-step plan",
+    "submit": "queue"
+  },
+  {
+    "label": "Approve",
+    "text": "y",
+    "submit": "send"
+  }
+]

@@ -235,6 +235,7 @@ The phone UI:
 ```
 ┌─────────────────────────────────────────────────────┐
 │ ●  [ project-a ] [ project-b ] [ project-c ]        │   ← top strip: tap to pick
+│ (Push) (Continue) (Fix) (Tests) (Plan) (Approve)    │   ← preset pills
 ├─────┬─────────────────────────────────────────┬─────┤
 │     │  Listening…  (red chip if no text field)│     │
 │  ◀  │          HOLD TO TALK                   │  ▶  │
@@ -252,6 +253,8 @@ The phone UI:
 ```
 
 - **Top strip** — one box per open Cursor window. Tap to select.
+- **Preset pills** — one-tap canned prompts (see
+  [Presets](#presets) below). Fully customizable.
 - **Left edge (◀)** — previous window.
 - **Right edge (▶)** — next window.
 - **Center area** — press and hold to dictate. While holding, if
@@ -313,6 +316,61 @@ The startup banner updates to show the new URL. If port 8000 is already
 in use, the server exits with a friendly message telling you to pick
 another port.
 
+### Presets
+
+Presets are one-tap buttons on the phone that type a canned prompt into
+the currently-selected Cursor window. They're perfect for the tiny
+handful of phrases you repeat all day (`continue`, `please fix it`,
+`commit and push to github`, etc.) so you don't have to dictate them
+every time.
+
+**Built-in defaults** (shown in the preset row out of the box):
+
+| Label | What it types | Submit |
+| --- | --- | --- |
+| Push | `commit all changes with a clear, concise message and push to github` | queue |
+| Continue | `continue` | send |
+| Fix | `please fix it` | send |
+| Tests | `run the tests and fix any failures` | queue |
+| Plan | `before making changes, lay out a short step-by-step plan` | queue |
+| Approve | `y` | send |
+
+**Customize them:**
+
+```bash
+cp presets.example.json presets.json
+# Edit presets.json — server reads it on startup
+./run.sh
+```
+
+`presets.json` is gitignored so your customizations won't collide with
+future updates of this repo.
+
+Each preset is an object:
+
+```json
+{
+  "label": "Push",
+  "text": "commit and push",
+  "submit": "queue"
+}
+```
+
+- `label` (required) — short text on the button.
+- `text` (required) — what gets typed into the focused field.
+- `submit` (optional, default `"queue"`) — one of:
+  - `"queue"` — press **Option+Enter** after typing, so Cursor appends
+    the message to the agent's queue instead of interrupting.
+  - `"send"` — press plain **Enter**. Submits immediately; may
+    interrupt an agent that's currently running.
+  - `"none"` — just type; leave the field for further editing.
+
+You can also point to a preset file outside the repo with
+`HC_PRESETS_PATH=/path/to/my-presets.json ./run.sh`.
+
+To debug a custom file, hit `http://<mac>.local:8000/presets` from any
+browser on your LAN to see exactly what the server loaded.
+
 ---
 
 ## Troubleshooting
@@ -369,10 +427,13 @@ so you aren't stuck with a modifier pressed forever.
 server/
   main.py                  FastAPI app, WebSocket endpoint, orchestration
   cursor_windows.py        AppleScript: list + focus Cursor windows
-  key_control.py           CoreGraphics: simulate Right Option + Enter + Cmd+Z
-  keystroke_watcher.py     CGEventTap: detect when Wispr stops typing
+  key_control.py           CoreGraphics: simulate keys (Right Option,
+                           Enter, Option+Enter, Cmd+Z, Unicode typing)
+  keystroke_watcher.py     CGEventTap: detect when Wispr stops typing,
+                           capture transcribed characters live
   ax_focus.py              Accessibility API: snapshot focused text field
                            (transcription preview + "no text field" warning)
+  presets.py               Load + validate one-tap preset prompts
 phone/
   index.html               Single-file landscape remote UI
   manifest.json            PWA manifest (fullscreen, landscape-locked)
@@ -381,6 +442,8 @@ phone/
   icon-512.png             PWA icon
 scripts/
   make_icons.py            Regenerate icons (stdlib-only, no deps)
+presets.example.json       Starter set of one-tap presets; copy to
+                           presets.json and edit to customize
 requirements.txt
 run.sh                     One-shot bootstrap + run script
 ```
