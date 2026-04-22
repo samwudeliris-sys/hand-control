@@ -57,6 +57,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from .ax_focus import FocusSnapshot, compute_transcription, read_focus
 from .cursor_windows import CursorWindow, focus_window, list_windows
 from .key_control import (
     press_cmd_z,
@@ -98,6 +99,7 @@ class State:
         self.watcher = KeystrokeWatcher()
         self.lock = asyncio.Lock()
         self.hold_start_ts: Optional[float] = None
+        self.baseline_focus: Optional[FocusSnapshot] = None
 
     def _selected_index(self) -> int:
         if not self.windows:
@@ -176,8 +178,21 @@ async def handle_hold_start() -> None:
     win = state.selected_window()
     if win is not None:
         focus_window(win.title)
-        # Give the WM a beat before pressing the modifier
+        # Give the WM a beat before pressing the modifier so focus has
+        # actually settled before we start reading AX attributes.
         await asyncio.sleep(0.08)
+
+    # Snapshot the currently focused text field. We'll diff against this
+    # after Wispr finishes so the phone can show what got transcribed.
+    state.baseline_focus = read_focus()
+    await broadcast(
+        {
+            "type": "focus_status",
+            "has_text_field": state.baseline_focus.has_text_field,
+            "role": state.baseline_focus.role,
+        }
+    )
+
     right_option_down()
 
 
@@ -197,8 +212,21 @@ async def handle_hold_end() -> None:
         2.5,
         ENTER_MAX_WAIT_S,
     )
-    # Tell the phone: Wispr is done, buttons can light up.
-    await broadcast({"type": "transcription_ready"})
+
+    # Snapshot the focused text field again, diff against the baseline
+    # to recover exactly what Wispr typed. This is what the user sees
+    # as the preview on their phone.
+    final_focus = read_focus()
+    baseline = state.baseline_focus or FocusSnapshot.empty()
+    transcription = compute_transcription(baseline.text, final_focus.text)
+
+    await broadcast(
+        {
+            "type": "transcription_ready",
+            "text": transcription,
+            "had_text_field": baseline.has_text_field and final_focus.has_text_field,
+        }
+    )
 
 
 async def handle_submit() -> None:

@@ -8,7 +8,9 @@ Turn your phone into a touch-screen remote that lets you:
 2. Pick which window you want to talk to.
 3. Press-and-hold a big button on your phone to dictate into it.
 4. Let go — Wispr Flow transcribes and types into the window.
-5. When it's done, two buttons at the bottom of your phone light up:
+5. The phone shows you the **transcribed text** (and warns if no text
+   field was actually focused — no more holding to talk into nothing).
+6. Two buttons at the bottom light up:
    - **Submit** → presses Option+Enter (queues the message in Cursor)
    - **Delete** → presses Cmd+Z (undoes the dictation)
 
@@ -79,14 +81,22 @@ touch-and-hold on your phone while you keep your eyes on your Mac screen.
 When you hold on the phone:
 
 1. Server focuses the currently-selected Cursor window (AppleScript).
-2. Server presses and holds **Right Option** — Wispr Flow's activation
+2. Server reads the **focused text field** via macOS's Accessibility
+   API and snapshots its value as a baseline. If no text field is
+   focused, the phone shows a red "No text field focused" chip so you
+   can cancel before you waste the breath.
+3. Server presses and holds **Right Option** — Wispr Flow's activation
    hotkey.
-3. You talk. Your AirPods send audio to your Mac. Wispr transcribes.
-4. You release on the phone. Server releases Right Option.
-5. A global `CGEventTap` watches keystrokes. When Wispr has been quiet for
-   400ms (i.e., finished typing), the server tells the phone, which
-   enables the Submit / Delete buttons.
-6. You tap one:
+4. You talk. Your AirPods send audio to your Mac. Wispr transcribes.
+5. You release on the phone. Server releases Right Option.
+6. A global `CGEventTap` watches keystrokes. When Wispr has been quiet
+   for 400ms (i.e., finished typing), the server reads the focused
+   text field **again** and diffs it against the baseline — the delta
+   is what Wispr just typed.
+7. The server sends the transcription to the phone. You see exactly
+   what got inserted, displayed in a scrollable preview card. The
+   Submit / Delete buttons light up.
+8. You tap one:
    - **Submit** → server presses **Option+Enter** — Cursor's
      "queue message" shortcut. If the agent is busy, your message
      is appended to the queue to run after the current task finishes.
@@ -96,6 +106,11 @@ When you hold on the phone:
 If you'd rather have Submit interrupt the current agent run, set
 `QUEUE_INSTEAD_OF_INTERRUPT = False` in `server/main.py` to fall back
 to plain Enter.
+
+The transcription preview and focus warning both require **Accessibility
+permission** (the same one the keystroke watcher needs). If the
+permission is missing the rest of the app still works; you just won't
+get the preview or the "no text field" warning.
 
 ---
 
@@ -221,10 +236,15 @@ The phone UI:
 ┌─────────────────────────────────────────────────────┐
 │ ●  [ project-a ] [ project-b ] [ project-c ]        │   ← top strip: tap to pick
 ├─────┬─────────────────────────────────────────┬─────┤
+│     │  Listening…  (red chip if no text field)│     │
+│  ◀  │          HOLD TO TALK                   │  ▶  │
 │     │                                         │     │
-│  ◀  │           HOLD TO TALK                  │  ▶  │
-│     │       (pulses while holding)            │     │
-│     │                                         │     │
+│     │   After release:                        │     │
+│     │   ┌───────────────────────────────────┐ │     │
+│     │   │ TRANSCRIPTION                     │ │     │
+│     │   │ "make the button bigger and       │ │     │
+│     │   │  add a tooltip"                   │ │     │
+│     │   └───────────────────────────────────┘ │     │
 │     ├──────────────────┬──────────────────────┤     │
 │     │     DELETE       │       SUBMIT         │     │
 │     │      (✕)         │        (↵)           │     │
@@ -234,10 +254,16 @@ The phone UI:
 - **Top strip** — one box per open Cursor window. Tap to select.
 - **Left edge (◀)** — previous window.
 - **Right edge (▶)** — next window.
-- **Center area** — press and hold to dictate.
+- **Center area** — press and hold to dictate. While holding, if
+  macOS reports no text field is focused a red chip appears — release
+  and click into Cursor's chat box before trying again.
+- **Transcription preview** — after you release, the text Wispr
+  transcribed appears in a scrollable card so you can review it
+  without looking at your Mac. If Wispr typed into nothing, the
+  card turns red and tells you why.
 - **Bottom buttons** — light up after Wispr finishes typing:
   - **Delete (✕)** — tap to undo (Cmd+Z).
-  - **Submit (↵)** — tap to send Enter.
+  - **Submit (↵)** — tap to send Option+Enter.
 
 Selecting any window also raises that Cursor window to the front on your
 Mac, so you always know which one you're about to dictate to.
@@ -345,6 +371,8 @@ server/
   cursor_windows.py        AppleScript: list + focus Cursor windows
   key_control.py           CoreGraphics: simulate Right Option + Enter + Cmd+Z
   keystroke_watcher.py     CGEventTap: detect when Wispr stops typing
+  ax_focus.py              Accessibility API: snapshot focused text field
+                           (transcription preview + "no text field" warning)
 phone/
   index.html               Single-file landscape remote UI
   manifest.json            PWA manifest (fullscreen, landscape-locked)
