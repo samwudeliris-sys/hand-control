@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -224,6 +225,41 @@ async def index() -> FileResponse:
     return FileResponse(PHONE_DIR / "index.html")
 
 
+@app.get("/manifest.json")
+async def manifest() -> FileResponse:
+    return FileResponse(PHONE_DIR / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/apple-touch-icon.png")
+async def apple_touch_icon() -> FileResponse:
+    return FileResponse(PHONE_DIR / "icon-180.png", media_type="image/png")
+
+
+@app.get("/apple-touch-icon-precomposed.png")
+async def apple_touch_icon_precomposed() -> FileResponse:
+    return FileResponse(PHONE_DIR / "icon-180.png", media_type="image/png")
+
+
+@app.get("/icon-180.png")
+async def icon_180() -> FileResponse:
+    return FileResponse(PHONE_DIR / "icon-180.png", media_type="image/png")
+
+
+@app.get("/icon-192.png")
+async def icon_192() -> FileResponse:
+    return FileResponse(PHONE_DIR / "icon-192.png", media_type="image/png")
+
+
+@app.get("/icon-512.png")
+async def icon_512() -> FileResponse:
+    return FileResponse(PHONE_DIR / "icon-512.png", media_type="image/png")
+
+
+@app.get("/favicon.ico")
+async def favicon() -> FileResponse:
+    return FileResponse(PHONE_DIR / "icon-192.png", media_type="image/png")
+
+
 app.mount("/static", StaticFiles(directory=str(PHONE_DIR)), name="static")
 
 
@@ -283,6 +319,29 @@ def get_lan_ip() -> str:
         return "127.0.0.1"
 
 
+def get_mdns_hostname() -> Optional[str]:
+    """Return this Mac's Bonjour / mDNS hostname like "MyMac.local".
+
+    This address is stable — it doesn't change when you switch Wi-Fi
+    networks or your Mac gets a new DHCP lease — so it's ideal for
+    bookmarking the phone UI as an app.
+    """
+    try:
+        result = subprocess.run(
+            ["scutil", "--get", "LocalHostName"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            name = result.stdout.strip()
+            if name:
+                return f"{name}.local"
+    except Exception:
+        pass
+    return None
+
+
 def _check_accessibility() -> bool:
     try:
         from ApplicationServices import AXIsProcessTrusted  # type: ignore
@@ -295,21 +354,29 @@ def main() -> None:
     import uvicorn
 
     ip = get_lan_ip()
+    hostname = get_mdns_hostname()
     trusted = _check_accessibility()
 
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 64)
     print("  Hand Control running.")
-    print(f"  On your phone, open:  http://{ip}:8000")
-    print("=" * 60)
+    print()
+    if hostname:
+        print(f"  Phone URL (stable):  http://{hostname}:8000")
+        print(f"  Phone URL (by IP):   http://{ip}:8000")
+        print()
+        print(f"  Bookmark the stable URL on your phone — the .local")
+        print(f"  hostname won't change when your Wi-Fi does.")
+    else:
+        print(f"  Phone URL:  http://{ip}:8000")
+    print("=" * 64)
     if trusted:
         print("  Accessibility: OK (precise Enter timing enabled)")
     else:
         print("  Accessibility: NOT GRANTED")
-        print("  → Open System Settings → Privacy & Security → Accessibility")
-        print("    and enable your terminal app (Terminal, iTerm, ...).")
-        print("    Then restart this server.")
+        print("  → System Settings → Privacy & Security → Accessibility")
+        print("    Enable your terminal app, then restart this server.")
         print("  Using hold-duration heuristic for Enter timing until then.")
-    print("=" * 60 + "\n")
+    print("=" * 64 + "\n")
     uvicorn.run("server.main:app", host="0.0.0.0", port=8000, log_level="info")
 
 

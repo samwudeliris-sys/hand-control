@@ -110,10 +110,17 @@ Leave it running. The first start will print something like:
 
 ```
 Hand Control running.
-  On your phone, open:  http://192.168.1.42:8000
+
+  Phone URL (stable):  http://MacBook-Air.local:8000
+  Phone URL (by IP):   http://192.168.1.42:8000
+
+  Bookmark the stable URL on your phone — the .local
+  hostname won't change when your Wi-Fi does.
 ```
 
-You'll come back to this URL shortly.
+Use the **stable URL** (the `.local` one) — it uses your Mac's
+Bonjour/mDNS hostname and stays the same across networks and
+DHCP renewals. You can bookmark it once and forget about it.
 
 ### 2. Configure Wispr Flow
 
@@ -157,14 +164,27 @@ enable "System Events".)
 
 ### 4. Open the phone UI
 
-On your phone's browser, go to the URL the server printed. For example:
+On your phone's browser, open the **stable URL** the server printed, e.g.:
 
 ```
-http://192.168.1.42:8000
+http://MacBook-Air.local:8000
 ```
 
-Hold your phone in **landscape**. Optionally tap Share → "Add to Home
-Screen" for an app-feel icon.
+(Substitute your Mac's own hostname, shown in the startup banner.)
+
+Hold your phone in **landscape**.
+
+### 5. Add to Home Screen (recommended)
+
+In Safari (iOS) or Chrome (Android), tap the Share button → **Add to
+Home Screen**. Hand Control has a proper PWA manifest, so launching
+from the home screen icon:
+
+- opens **fullscreen** (no browser bars)
+- **locks to landscape**
+- uses the app icon and name "Hand Control"
+
+From then on, it's just an icon on your home screen — tap, hold, talk.
 
 ---
 
@@ -251,6 +271,11 @@ Make sure both devices are on the same Wi-Fi. Some guest / corporate
 networks isolate clients — try a personal hotspot to confirm. macOS
 firewall may also need to allow incoming connections to Python.
 
+**The `.local` URL doesn't resolve on my phone.**
+Some networks block mDNS / Bonjour between clients. Fall back to the IP
+URL printed in the banner. If Bonjour works but is slow, it may take
+a couple of seconds the first time.
+
 **Holding works but Wispr doesn't start.**
 Wispr Flow isn't running, or its hotkey isn't `Right Option`. Double-check
 the hotkey in Wispr's settings.
@@ -276,10 +301,16 @@ so you aren't stuck with a modifier pressed forever.
 server/
   main.py                  FastAPI app, WebSocket endpoint, orchestration
   cursor_windows.py        AppleScript: list + focus Cursor windows
-  key_control.py           CoreGraphics: simulate Right Option + Enter
+  key_control.py           CoreGraphics: simulate Right Option + Enter + Cmd+Z
   keystroke_watcher.py     CGEventTap: detect when Wispr stops typing
 phone/
   index.html               Single-file landscape remote UI
+  manifest.json            PWA manifest (fullscreen, landscape-locked)
+  icon-180.png             Apple Touch icon
+  icon-192.png             PWA icon
+  icon-512.png             PWA icon
+scripts/
+  make_icons.py            Regenerate icons (stdlib-only, no deps)
 requirements.txt
 run.sh                     One-shot bootstrap + run script
 ```
