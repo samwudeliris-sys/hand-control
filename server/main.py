@@ -196,35 +196,96 @@ async def handle_hold_start() -> None:
     right_option_down()
 
 
+def _wait_and_capture(release_ts: float, hold_duration: float) -> tuple[str, bool]:
+    """Wait for Wispr's typing to settle while polling the focused
+    text field at ~20 Hz.
+
+    Returns (final_text, auto_submitted).
+
+    Polling matters because of Wispr's built-in *"press enter"* voice
+    command: Wispr will type your message and then press Return, which
+    immediately clears the chat input in most apps. If we only read AX
+    *after* the settle, we'd see an empty field. By remembering the
+    latest non-empty value we saw during typing, we can still show the
+    user what they actually dictated even though Wispr already
+    submitted it.
+    """
+    poll_s = 0.05
+    idle_s = ENTER_IDLE_MS / 1000.0
+    first_deadline = release_ts + max(2.5, hold_duration * 0.6)
+    hard_deadline = release_ts + ENTER_MAX_WAIT_S
+
+    latest_text: str = ""
+
+    def snapshot() -> None:
+        nonlocal latest_text
+        snap = read_focus()
+        if snap.text:
+            latest_text = snap.text
+
+    watcher = state.watcher
+
+    # Phase 1: wait for first keystroke (or first non-empty AX read).
+    while time.monotonic() < first_deadline:
+        if watcher.active and watcher.last_keydown_ts > release_ts:
+            break
+        snapshot()
+        if latest_text:
+            break
+        time.sleep(poll_s)
+
+    # Phase 2: wait for typing to settle, snapshotting as we go.
+    while True:
+        now = time.monotonic()
+        snapshot()
+        if now > hard_deadline:
+            break
+        if watcher.active:
+            if now - watcher.last_keydown_ts >= idle_s:
+                break
+        else:
+            # No event tap — fall back to a heuristic quiet window.
+            extra = 0.4 + min(hold_duration * 0.3, 3.0)
+            if now - release_ts >= extra:
+                break
+        time.sleep(poll_s)
+
+    # One last snapshot after settle, in case Wispr wrote more in the
+    # final poll window. If the field is now empty (auto-submit cleared
+    # it), latest_text still holds the pre-clear value.
+    snapshot()
+
+    auto_submitted = watcher.saw_return_since(release_ts)
+    return latest_text, auto_submitted
+
+
 async def handle_hold_end() -> None:
     right_option_up()
     release_ts = time.monotonic()
     hold_duration = (
         release_ts - state.hold_start_ts if state.hold_start_ts else 0.0
     )
-    # Block until Wispr has finished typing. Runs in a worker thread so we
-    # don't stall the event loop.
-    await asyncio.to_thread(
-        state.watcher.wait_for_typing_to_settle,
-        release_ts,
-        hold_duration,
-        ENTER_IDLE_MS,
-        2.5,
-        ENTER_MAX_WAIT_S,
+
+    # Block until Wispr has finished typing while polling the AX text.
+    # Runs in a worker thread so we don't stall the event loop.
+    final_text, auto_submitted = await asyncio.to_thread(
+        _wait_and_capture, release_ts, hold_duration
     )
 
-    # Snapshot the focused text field again, diff against the baseline
-    # to recover exactly what Wispr typed. This is what the user sees
-    # as the preview on their phone.
-    final_focus = read_focus()
     baseline = state.baseline_focus or FocusSnapshot.empty()
-    transcription = compute_transcription(baseline.text, final_focus.text)
+    transcription = compute_transcription(baseline.text, final_text)
+
+    # If Wispr auto-submitted, the field is probably cleared now so AX
+    # reads as "no text field" — but we know the baseline had one, so
+    # trust that for the user's status display.
+    had_text_field = baseline.has_text_field or bool(transcription)
 
     await broadcast(
         {
             "type": "transcription_ready",
             "text": transcription,
-            "had_text_field": baseline.has_text_field and final_focus.has_text_field,
+            "had_text_field": had_text_field,
+            "auto_submitted": auto_submitted,
         }
     )
 

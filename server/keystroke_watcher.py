@@ -19,6 +19,7 @@ from Quartz import (
     CFRunLoopAddSource,
     CFRunLoopGetCurrent,
     CFRunLoopRun,
+    CGEventGetIntegerValueField,
     CGEventMaskBit,
     CGEventTapCreate,
     CGEventTapEnable,
@@ -26,15 +27,30 @@ from Quartz import (
     kCGEventKeyDown,
     kCGEventTapOptionListenOnly,
     kCGHeadInsertEventTap,
+    kCGKeyboardEventKeycode,
     kCGSessionEventTap,
 )
 
 
+# macOS virtual keycode for the Return / Enter key on the main keyboard.
+_KEYCODE_RETURN = 36
+# Numeric keypad Enter — some apps / dictation tools use this variant.
+_KEYCODE_KEYPAD_ENTER = 76
+
+
 class KeystrokeWatcher:
-    """Maintain a monotonically updated `last_keydown_ts` timestamp."""
+    """Maintain a monotonically updated ``last_keydown_ts`` timestamp and
+    remember when the Return / Enter key was last pressed.
+
+    The Return timestamp lets ``main.py`` detect when Wispr Flow's
+    built-in *"press enter"* voice command fires, so we can tell the
+    phone the message has already been submitted and skip the normal
+    Submit / Delete confirmation flow.
+    """
 
     def __init__(self) -> None:
         self._last_ts: float = 0.0
+        self._last_return_ts: float = 0.0
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._tap = None
@@ -46,9 +62,23 @@ class KeystrokeWatcher:
         with self._lock:
             return self._last_ts
 
-    def _callback(self, proxy, type_, event, refcon):
+    def saw_return_since(self, ts: float) -> bool:
+        """True if Return / Enter was pressed after the given timestamp."""
         with self._lock:
-            self._last_ts = time.monotonic()
+            return self._last_return_ts > ts
+
+    def _callback(self, proxy, type_, event, refcon):
+        now = time.monotonic()
+        try:
+            keycode = CGEventGetIntegerValueField(
+                event, kCGKeyboardEventKeycode
+            )
+        except Exception:
+            keycode = -1
+        with self._lock:
+            self._last_ts = now
+            if keycode in (_KEYCODE_RETURN, _KEYCODE_KEYPAD_ENTER):
+                self._last_return_ts = now
         return event
 
     def _run(self) -> None:

@@ -266,6 +266,11 @@
     border-color: var(--red);
     color: var(--red);
   }
+  .preview.sent {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green);
+  }
   .preview .label {
     display: block;
     font-size: 10px;
@@ -276,6 +281,7 @@
     font-weight: 500;
   }
   .preview.warn .label { color: var(--red); opacity: 0.85; }
+  .preview.sent  .label { color: var(--green); opacity: 0.85; }
 
   /* In ready mode, shrink the project name / hint so the preview
      gets the room. */
@@ -465,10 +471,14 @@
   let selected = -1;
   let wakeLock = null;
 
-  // State machine: 'idle' | 'holding' | 'waiting' | 'ready'
+  // State machine: 'idle' | 'holding' | 'waiting' | 'ready' | 'sent'
+  // 'sent' is shown when Wispr's "press enter" voice command already
+  // submitted the message — no Submit/Delete needed, auto-resets to idle.
   let mode = 'idle';
   let lastTranscription = '';
   let lastHadTextField = true;
+  let lastAutoSubmitted = false;
+  let sentResetTimer = null;
 
   // ----- Wake lock -----
   async function requestWakeLock() {
@@ -516,7 +526,10 @@
         } else if (msg.type === 'transcription_ready') {
           lastTranscription = (msg.text || '').trim();
           lastHadTextField = msg.had_text_field !== false;
-          if (mode === 'waiting') setMode('ready');
+          lastAutoSubmitted = msg.auto_submitted === true;
+          if (mode === 'waiting') {
+            setMode(lastAutoSubmitted ? 'sent' : 'ready');
+          }
         }
       } catch {}
     };
@@ -531,10 +544,17 @@
   // ----- Mode / UI -----
   function setMode(m) {
     mode = m;
+
+    // Cancel any pending auto-dismiss when leaving 'sent' mode.
+    if (m !== 'sent' && sentResetTimer) {
+      clearTimeout(sentResetTimer);
+      sentResetTimer = null;
+    }
+
     // hold area visual state
     holdEl.classList.toggle('holding', m === 'holding');
     holdEl.classList.toggle('waiting', m === 'waiting');
-    holdEl.classList.toggle('ready', m === 'ready');
+    holdEl.classList.toggle('ready', m === 'ready' || m === 'sent');
 
     // Hint text
     if (windows.length === 0 || selected < 0) {
@@ -543,6 +563,7 @@
     else if (m === 'holding')     hintEl.textContent = 'Listening…';
     else if (m === 'waiting')     hintEl.textContent = 'Transcribing…';
     else if (m === 'ready')       hintEl.textContent = '';
+    else if (m === 'sent')        hintEl.textContent = '';
 
     // Only show the "no text field" warning while the user is actively
     // holding — once they release, the focus might shift and the
@@ -550,9 +571,9 @@
     if (m !== 'holding') focusWarnEl.classList.remove('show');
 
     // Transcription preview
+    previewEl.classList.remove('show', 'warn', 'sent');
     if (m === 'ready') {
       if (lastTranscription) {
-        previewEl.classList.remove('warn');
         previewLabelEl.textContent = 'Transcription';
         previewTextEl.textContent = lastTranscription;
       } else if (!lastHadTextField) {
@@ -568,12 +589,19 @@
           + "Check that Wispr Flow is running and its hotkey is Right Option.";
       }
       previewEl.classList.add('show');
-    } else {
-      previewEl.classList.remove('show');
-      previewEl.classList.remove('warn');
+    } else if (m === 'sent') {
+      // Wispr's "press enter" command already submitted the message.
+      previewEl.classList.add('show', 'sent');
+      previewLabelEl.textContent = '✓ Sent via "press enter"';
+      previewTextEl.textContent = lastTranscription || '(submitted)';
+      // Auto-dismiss back to idle after a moment so the next hold
+      // starts clean. Tapping anywhere also dismisses.
+      sentResetTimer = setTimeout(() => {
+        if (mode === 'sent') setMode('idle');
+      }, 3500);
     }
 
-    // Buttons
+    // Buttons — only active in 'ready' mode. In 'sent', nothing to do.
     const btnsActive = (m === 'ready');
     btnDelete.classList.toggle('enabled', btnsActive);
     btnSubmit.classList.toggle('enabled', btnsActive);
@@ -612,7 +640,9 @@
       el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         // Switching windows invalidates any pending confirmation.
-        if (mode === 'waiting' || mode === 'ready') setMode('idle');
+        if (mode === 'waiting' || mode === 'ready' || mode === 'sent') {
+          setMode('idle');
+        }
         send({ type: 'select', index: i });
       });
       boxesEl.appendChild(el);
@@ -664,7 +694,9 @@
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       el.classList.add('active');
-      if (mode === 'waiting' || mode === 'ready') setMode('idle');
+      if (mode === 'waiting' || mode === 'ready' || mode === 'sent') {
+        setMode('idle');
+      }
       send({ type: delta < 0 ? 'switch_prev' : 'switch_next' });
     });
     ['pointerup', 'pointercancel', 'pointerleave'].forEach((evt) => {
