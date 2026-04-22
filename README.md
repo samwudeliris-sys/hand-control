@@ -69,8 +69,15 @@ When you hold on the phone:
    400ms (i.e., finished typing), the server tells the phone, which
    enables the Submit / Delete buttons.
 6. You tap one:
-   - Submit → server presses Enter
-   - Delete → server presses Cmd+Z to undo Wispr's insertion
+   - **Submit** → server presses **Option+Enter** — Cursor's
+     "queue message" shortcut. If the agent is busy, your message
+     is appended to the queue to run after the current task finishes.
+     If the agent is idle, it just submits normally.
+   - **Delete** → server presses Cmd+Z to undo Wispr's insertion.
+
+If you'd rather have Submit interrupt the current agent run, set
+`QUEUE_INSTEAD_OF_INTERRUPT = False` in `server/main.py` to fall back
+to plain Enter.
 
 ---
 

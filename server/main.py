@@ -12,7 +12,9 @@ Control flow:
         → wait for Wispr to finish typing (CGEventTap keystroke watcher)
         → send "transcription_ready" to phone so it enables Submit / Delete
 
-    phone submit        → press Enter
+    phone submit        → press Option+Enter (Cursor's "queue message"
+                          shortcut — message is appended after the current
+                          agent run instead of interrupting it)
     phone delete        → press Cmd+Z (undo Wispr's last insertion)
 
     phone switch_prev / switch_next / select
@@ -39,6 +41,7 @@ from .cursor_windows import CursorWindow, focus_window, list_windows
 from .key_control import (
     press_cmd_z,
     press_enter,
+    press_option_enter,
     right_option_down,
     right_option_up,
 )
@@ -48,6 +51,15 @@ PHONE_DIR = Path(__file__).resolve().parent.parent / "phone"
 POLL_INTERVAL_S = 1.0
 ENTER_IDLE_MS = 400
 ENTER_MAX_WAIT_S = 8.0
+
+# Cursor keyboard behavior:
+#   Enter         → submit (may interrupt current agent run)
+#   Option+Enter  → queue message to run after current task finishes
+#   Cmd+Enter     → "stop & send" (explicitly interrupt)
+#
+# Set to True to always queue. If the agent is idle, Option+Enter just
+# submits normally, so this is the safe default for agent workflows.
+QUEUE_INSTEAD_OF_INTERRUPT = True
 
 
 def _sort_key(w: CursorWindow) -> tuple[str, str]:
@@ -170,7 +182,10 @@ async def handle_hold_end() -> None:
 
 
 async def handle_submit() -> None:
-    press_enter()
+    if QUEUE_INSTEAD_OF_INTERRUPT:
+        press_option_enter()
+    else:
+        press_enter()
 
 
 async def handle_delete() -> None:

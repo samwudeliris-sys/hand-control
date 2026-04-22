@@ -36,6 +36,17 @@ def press_enter() -> None:
     _post(KEYCODE_RETURN, False)
 
 
+def press_option_enter() -> None:
+    """Simulate Option+Enter — Cursor's "queue message" shortcut.
+
+    When the agent is running, this appends the message to the queue to
+    be processed after the current run finishes, instead of interrupting.
+    When the agent is idle, it just submits normally.
+    """
+    _post(KEYCODE_RETURN, True, flags=kCGEventFlagMaskAlternate)
+    _post(KEYCODE_RETURN, False, flags=kCGEventFlagMaskAlternate)
+
+
 def press_cmd_z() -> None:
     """Simulate Cmd+Z to undo the last Wispr Flow insertion."""
     _post(KEYCODE_Z, True, flags=kCGEventFlagMaskCommand)
