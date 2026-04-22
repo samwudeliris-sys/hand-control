@@ -41,18 +41,35 @@ ENTER_IDLE_MS = 400
 ENTER_MAX_WAIT_S = 8.0
 
 
+def _sort_key(w: CursorWindow) -> tuple[str, str]:
+    """Stable sort: alphabetical by project (then title) so box positions
+    on the phone don't shuffle every time we focus a window."""
+    return (w.project.lower(), w.title.lower())
+
+
 class State:
     def __init__(self) -> None:
         self.windows: list[CursorWindow] = []
-        self.selected_index: int = 0
+        # Track the selected window by title (identity), not index — macOS
+        # reorders the window list whenever we focus something.
+        self.selected_title: Optional[str] = None
         self.clients: set[WebSocket] = set()
         self.watcher = KeystrokeWatcher()
         self.lock = asyncio.Lock()
 
-    def selected_window(self) -> Optional[CursorWindow]:
+    def _selected_index(self) -> int:
         if not self.windows:
+            return -1
+        if self.selected_title is not None:
+            for i, w in enumerate(self.windows):
+                if w.title == self.selected_title:
+                    return i
+        return 0
+
+    def selected_window(self) -> Optional[CursorWindow]:
+        idx = self._selected_index()
+        if idx < 0:
             return None
-        idx = max(0, min(self.selected_index, len(self.windows) - 1))
         return self.windows[idx]
 
     def to_payload(self) -> dict:
@@ -61,7 +78,7 @@ class State:
             "windows": [
                 {"title": w.title, "project": w.project} for w in self.windows
             ],
-            "selected": self.selected_index if self.windows else -1,
+            "selected": self._selected_index(),
         }
 
 
@@ -90,12 +107,19 @@ async def poll_windows() -> None:
             print(f"[poll_windows] error: {exc}")
             windows = []
 
+        # Stable order so phone box positions don't shuffle as z-order changes.
+        windows.sort(key=_sort_key)
+
         key = tuple((w.title, w.project) for w in windows)
         async with state.lock:
             if key != prev_key:
                 state.windows = windows
-                if state.selected_index >= len(windows):
-                    state.selected_index = max(0, len(windows) - 1)
+                # If the previously selected window went away, fall back to
+                # the first available. Otherwise the selection sticks with
+                # the same window by title.
+                titles = {w.title for w in windows}
+                if state.selected_title not in titles:
+                    state.selected_title = windows[0].title if windows else None
                 prev_key = key
                 await broadcast(state.to_payload())
         await asyncio.sleep(POLL_INTERVAL_S)
@@ -126,8 +150,8 @@ async def handle_hold_end() -> None:
 async def handle_select(index: int) -> None:
     async with state.lock:
         if 0 <= index < len(state.windows):
-            state.selected_index = index
             win = state.windows[index]
+            state.selected_title = win.title
             await broadcast(state.to_payload())
         else:
             win = None
@@ -139,8 +163,12 @@ async def handle_switch(delta: int) -> None:
     async with state.lock:
         if not state.windows:
             return
-        state.selected_index = (state.selected_index + delta) % len(state.windows)
-        win = state.windows[state.selected_index]
+        current = state._selected_index()
+        if current < 0:
+            current = 0
+        new_idx = (current + delta) % len(state.windows)
+        win = state.windows[new_idx]
+        state.selected_title = win.title
         await broadcast(state.to_payload())
     focus_window(win.title)
 
