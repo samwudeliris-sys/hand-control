@@ -7,8 +7,10 @@ Turn your phone into a touch-screen remote that lets you:
 1. See every open Cursor window as a tappable box.
 2. Pick which window you want to talk to.
 3. Press-and-hold a big button on your phone to dictate into it.
-4. Let go — the system automatically waits for Wispr Flow to finish
-   transcribing, then presses Enter for you.
+4. Let go — Wispr Flow transcribes and types into the window.
+5. When it's done, two buttons at the bottom of your phone light up:
+   - **Submit** → presses Enter
+   - **Delete** → presses Cmd+Z (undoes the dictation)
 
 Your AirPods (connected to your Mac) are still the mic. The phone is just a
 remote control — **no audio ever goes over the network**.
@@ -64,7 +66,11 @@ When you hold on the phone:
 3. You talk. Your AirPods send audio to your Mac. Wispr transcribes.
 4. You release on the phone. Server releases Right Option.
 5. A global `CGEventTap` watches keystrokes. When Wispr has been quiet for
-   400ms, the server fires Enter.
+   400ms (i.e., finished typing), the server tells the phone, which
+   enables the Submit / Delete buttons.
+6. You tap one:
+   - Submit → server presses Enter
+   - Delete → server presses Cmd+Z to undo Wispr's insertion
 
 ---
 
@@ -164,7 +170,7 @@ Screen" for an app-feel icon.
 
 ## Using it
 
-The phone UI has three zones:
+The phone UI:
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -174,31 +180,37 @@ The phone UI has three zones:
 │  ◀  │           HOLD TO TALK                  │  ▶  │
 │     │       (pulses while holding)            │     │
 │     │                                         │     │
-└─────┴─────────────────────────────────────────┴─────┘
-  prev          press-and-hold zone               next
+│     ├──────────────────┬──────────────────────┤     │
+│     │     DELETE       │       SUBMIT         │     │
+│     │      (✕)         │        (↵)           │     │
+└─────┴──────────────────┴──────────────────────┴─────┘
 ```
 
 - **Top strip** — one box per open Cursor window. Tap to select.
-- **Left edge (◀)** — select previous window.
-- **Right edge (▶)** — select next window.
-- **Center area** — press and hold to dictate. Selecting any window also
-  raises that Cursor window to the front on your Mac, so you always know
-  which one you're about to dictate to.
+- **Left edge (◀)** — previous window.
+- **Right edge (▶)** — next window.
+- **Center area** — press and hold to dictate.
+- **Bottom buttons** — light up after Wispr finishes typing:
+  - **Delete (✕)** — tap to undo (Cmd+Z).
+  - **Submit (↵)** — tap to send Enter.
 
-When you release the center, Wispr finishes typing, and Enter fires
-automatically.
+Selecting any window also raises that Cursor window to the front on your
+Mac, so you always know which one you're about to dictate to.
+
+While waiting for Wispr to finish, the buttons pulse; once ready, they
+become solid and tappable.
 
 ---
 
 ## Configuration
 
-### Change the Enter delay
+### Change the "Wispr is done" detection delay
 
 Edit `server/main.py`:
 
 ```python
-ENTER_IDLE_MS = 400     # how long Wispr must be quiet before Enter fires
-ENTER_MAX_WAIT_S = 8.0  # safety cap — fires Enter no matter what after this
+ENTER_IDLE_MS = 400     # how long Wispr must be quiet before buttons light up
+ENTER_MAX_WAIT_S = 8.0  # safety cap — give up waiting after this
 ```
 
 ### Change the activation hotkey
@@ -243,9 +255,14 @@ firewall may also need to allow incoming connections to Python.
 Wispr Flow isn't running, or its hotkey isn't `Right Option`. Double-check
 the hotkey in Wispr's settings.
 
-**Enter fires too early or too late.**
+**Submit button lights up too early or too late.**
 Adjust `ENTER_IDLE_MS` in `server/main.py`. For slower / longer
 transcriptions, try 600–800ms.
+
+**Delete doesn't fully remove the dictation.**
+Delete sends Cmd+Z (undo), which works if Wispr pastes text in one shot.
+If Wispr simulated keystrokes in a way the app groups differently, Cmd+Z
+may only undo part of it. Tap Delete again to continue undoing.
 
 **The server kills any held modifier on disconnect.**
 Intentional. If your phone drops Wi-Fi mid-hold, we release Right Option

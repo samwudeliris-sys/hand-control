@@ -24,6 +24,10 @@
     --box-selected: #1d1d1d;
     --box-border: #1d1d1d;
     --box-border-selected: var(--accent);
+    --green: #1ec67a;
+    --green-dim: #0d4027;
+    --red: #d94a26;
+    --red-dim: #3f1810;
   }
 
   * {
@@ -32,8 +36,6 @@
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
-    /* Prevent iOS double-tap-to-zoom and pinch-zoom on all elements,
-       while still allowing single-finger scroll where needed. */
     touch-action: manipulation;
   }
 
@@ -52,8 +54,7 @@
     touch-action: manipulation;
   }
 
-  /* The hold-to-talk area absolutely must not scroll, zoom, or pan. */
-  .hold, .edge {
+  .hold, .edge, .action-btn {
     touch-action: none;
   }
 
@@ -63,7 +64,7 @@
     height: 100dvh;
   }
 
-  /* Top bar: connection + window boxes */
+  /* Top bar */
   header {
     flex: 0 0 auto;
     padding: 10px 14px 8px;
@@ -130,7 +131,7 @@
     font-style: italic;
   }
 
-  /* Main row: edge zones + hold area */
+  /* Main row */
   main {
     flex: 1;
     display: flex;
@@ -138,18 +139,26 @@
   }
 
   .edge {
-    flex: 0 0 14%;
+    flex: 0 0 13%;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--edge-bg);
     color: #555;
-    font-size: 40px;
+    font-size: 36px;
     transition: background 0.08s, color 0.08s;
   }
   .edge.active {
     background: var(--edge-press);
     color: var(--fg);
+  }
+
+  /* Center column contains the hold area (top) and action buttons (bottom) */
+  .center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
   }
 
   .hold {
@@ -158,34 +167,37 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 14px;
+    gap: 12px;
     background: var(--bg);
     position: relative;
     overflow: hidden;
+    min-height: 0;
   }
 
   .hold .project {
-    font-size: 28px;
+    font-size: 24px;
     font-weight: 600;
     letter-spacing: -0.01em;
-    max-width: 85%;
+    max-width: 90%;
     text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    color: var(--fg);
+    transition: color 0.15s;
   }
 
   .hold .hint {
-    font-size: 12px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.18em;
     color: var(--muted);
+    transition: color 0.15s;
   }
 
   .hold.no-window .project { color: var(--muted); }
   .hold.no-window .hint { opacity: 0; }
 
-  /* Pulse ring while holding */
   .pulse {
     position: absolute;
     left: 50%;
@@ -199,10 +211,8 @@
     pointer-events: none;
   }
 
-  .hold.holding .pulse {
-    animation: pulse 1.4s ease-out infinite;
-  }
-  .hold.holding .project { color: var(--accent); }
+  .hold.holding .pulse { animation: pulse 1.4s ease-out infinite; }
+  .hold.holding .project,
   .hold.holding .hint { color: var(--accent); }
 
   @keyframes pulse {
@@ -211,17 +221,93 @@
     100% { transform: translate(-50%, -50%) scale(5);   opacity: 0; }
   }
 
-  /* The "mic" blob in the center */
   .blob {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     background: var(--muted);
-    transition: background 0.12s, transform 0.12s;
+    transition: background 0.12s, transform 0.15s;
   }
   .hold.holding .blob {
     background: var(--accent);
     transform: scale(1.8);
+  }
+  .hold.waiting .blob {
+    background: var(--accent);
+    animation: spin 1s linear infinite;
+    transform: scale(1.2);
+  }
+
+  @keyframes spin {
+    0% { opacity: 0.3; }
+    50% { opacity: 1; }
+    100% { opacity: 0.3; }
+  }
+
+  /* Bottom action buttons (Delete / Submit) */
+  .actions {
+    flex: 0 0 30%;
+    display: flex;
+    border-top: 1px solid #0e0e0e;
+    min-height: 90px;
+  }
+
+  .action-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: #0a0a0a;
+    color: #333;
+    border: none;
+    transition: background 0.12s, color 0.12s, transform 0.08s;
+    pointer-events: none; /* disabled by default */
+  }
+
+  .action-btn .icon {
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .action-btn.delete.enabled {
+    background: var(--red-dim);
+    color: var(--red);
+    pointer-events: auto;
+  }
+  .action-btn.delete.enabled:active {
+    background: var(--red);
+    color: #fff;
+    transform: scale(0.98);
+  }
+  .action-btn.delete + .action-btn.submit {
+    border-left: 1px solid #0e0e0e;
+  }
+
+  .action-btn.submit.enabled {
+    background: var(--green-dim);
+    color: var(--green);
+    pointer-events: auto;
+  }
+  .action-btn.submit.enabled:active {
+    background: var(--green);
+    color: #000;
+    transform: scale(0.98);
+  }
+
+  /* When waiting for Wispr, show a subtle loading pulse on both buttons */
+  .actions.waiting .action-btn {
+    animation: btn-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes btn-pulse {
+    0%, 100% { opacity: 0.5; }
+    50%      { opacity: 1;   }
   }
 </style>
 </head>
@@ -238,12 +324,27 @@
 
   <main>
     <div class="edge" id="edgeLeft">◀</div>
-    <div class="hold" id="hold">
-      <div class="project" id="project">—</div>
-      <div class="blob"></div>
-      <div class="hint">Hold to talk</div>
-      <div class="pulse"></div>
+
+    <div class="center">
+      <div class="hold" id="hold">
+        <div class="project" id="project">—</div>
+        <div class="blob"></div>
+        <div class="hint" id="hint">Hold to talk</div>
+        <div class="pulse"></div>
+      </div>
+
+      <div class="actions" id="actions">
+        <button class="action-btn delete" id="btnDelete" type="button">
+          <span class="icon">✕</span>
+          <span>Delete</span>
+        </button>
+        <button class="action-btn submit" id="btnSubmit" type="button">
+          <span class="icon">↵</span>
+          <span>Submit</span>
+        </button>
+      </div>
     </div>
+
     <div class="edge" id="edgeRight">▶</div>
   </main>
 
@@ -251,7 +352,11 @@
 (() => {
   const boxesEl = document.getElementById('boxes');
   const projectEl = document.getElementById('project');
+  const hintEl = document.getElementById('hint');
   const holdEl = document.getElementById('hold');
+  const actionsEl = document.getElementById('actions');
+  const btnDelete = document.getElementById('btnDelete');
+  const btnSubmit = document.getElementById('btnSubmit');
   const edgeL = document.getElementById('edgeLeft');
   const edgeR = document.getElementById('edgeRight');
   const dot = document.getElementById('dot');
@@ -261,10 +366,12 @@
   let reconnectDelay = 500;
   let windows = [];
   let selected = -1;
-  let holding = false;
   let wakeLock = null;
 
-  // ----- Wake lock: keep screen on while the app is open -----
+  // State machine: 'idle' | 'holding' | 'waiting' | 'ready'
+  let mode = 'idle';
+
+  // ----- Wake lock -----
   async function requestWakeLock() {
     if (!('wakeLock' in navigator)) return;
     try {
@@ -289,7 +396,7 @@
     ws.onclose = () => {
       dot.className = 'dot bad';
       statusText.textContent = 'reconnecting';
-      safeEndHold();
+      safeReset();
       setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
     };
@@ -300,7 +407,9 @@
         if (msg.type === 'state') {
           windows = msg.windows || [];
           selected = msg.selected;
-          render();
+          renderBoxes();
+        } else if (msg.type === 'transcription_ready') {
+          if (mode === 'waiting') setMode('ready');
         }
       } catch {}
     };
@@ -312,9 +421,34 @@
     }
   }
 
+  // ----- Mode / UI -----
+  function setMode(m) {
+    mode = m;
+    // hold area visual state
+    holdEl.classList.toggle('holding', m === 'holding');
+    holdEl.classList.toggle('waiting', m === 'waiting');
+
+    // Hint text
+    if (windows.length === 0 || selected < 0) {
+      hintEl.textContent = 'No Cursor windows';
+    } else if (m === 'idle')      hintEl.textContent = 'Hold to talk';
+    else if (m === 'holding')     hintEl.textContent = 'Listening…';
+    else if (m === 'waiting')     hintEl.textContent = 'Transcribing…';
+    else if (m === 'ready')       hintEl.textContent = 'Submit or delete';
+
+    // Buttons
+    const btnsActive = (m === 'ready');
+    btnDelete.classList.toggle('enabled', btnsActive);
+    btnSubmit.classList.toggle('enabled', btnsActive);
+    actionsEl.classList.toggle('waiting', m === 'waiting');
+  }
+
+  function safeReset() {
+    setMode('idle');
+  }
+
   // ----- Rendering -----
-  function render() {
-    // Project name in center
+  function renderBoxes() {
     if (windows.length === 0 || selected < 0) {
       projectEl.textContent = 'No Cursor windows';
       holdEl.classList.add('no-window');
@@ -323,7 +457,9 @@
       holdEl.classList.remove('no-window');
     }
 
-    // Top box strip
+    // Refresh hint to reflect window presence
+    setMode(mode);
+
     boxesEl.innerHTML = '';
     if (windows.length === 0) {
       const empty = document.createElement('div');
@@ -338,6 +474,8 @@
       el.textContent = w.project || w.title;
       el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
+        // Switching windows invalidates any pending confirmation.
+        if (mode === 'waiting' || mode === 'ready') setMode('idle');
         send({ type: 'select', index: i });
       });
       boxesEl.appendChild(el);
@@ -346,28 +484,18 @@
 
   // ----- Hold-to-talk -----
   function startHold() {
-    if (holding) return;
+    if (mode === 'holding') return;
     if (windows.length === 0) return;
-    holding = true;
-    holdEl.classList.add('holding');
+    setMode('holding');
     send({ type: 'hold_start' });
   }
 
   function endHold() {
-    if (!holding) return;
-    holding = false;
-    holdEl.classList.remove('holding');
+    if (mode !== 'holding') return;
+    setMode('waiting');
     send({ type: 'hold_end' });
   }
 
-  function safeEndHold() {
-    if (holding) {
-      holding = false;
-      holdEl.classList.remove('holding');
-    }
-  }
-
-  // Pointer events on center hold area
   holdEl.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     holdEl.setPointerCapture(e.pointerId);
@@ -380,11 +508,26 @@
     });
   });
 
+  // ----- Submit / Delete -----
+  btnSubmit.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (mode !== 'ready') return;
+    send({ type: 'submit' });
+    setMode('idle');
+  });
+  btnDelete.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (mode !== 'ready') return;
+    send({ type: 'delete' });
+    setMode('idle');
+  });
+
   // ----- Edge taps (prev/next) -----
   function wireEdge(el, delta) {
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       el.classList.add('active');
+      if (mode === 'waiting' || mode === 'ready') setMode('idle');
       send({ type: delta < 0 ? 'switch_prev' : 'switch_next' });
     });
     ['pointerup', 'pointercancel', 'pointerleave'].forEach((evt) => {
@@ -394,12 +537,13 @@
   wireEdge(edgeL, -1);
   wireEdge(edgeR, +1);
 
-  // Prevent pinch zoom, double-tap zoom, context menus
+  // Prevent default gestures
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('gesturechange', (e) => e.preventDefault());
   document.addEventListener('dblclick', (e) => e.preventDefault());
   document.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  setMode('idle');
   connect();
 })();
 </script>

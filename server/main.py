@@ -10,7 +10,10 @@ Control flow:
     phone hold_end
         → release Right Option
         → wait for Wispr to finish typing (CGEventTap keystroke watcher)
-        → press Enter
+        → send "transcription_ready" to phone so it enables Submit / Delete
+
+    phone submit        → press Enter
+    phone delete        → press Cmd+Z (undo Wispr's last insertion)
 
     phone switch_prev / switch_next / select
         → update the server-side selected window index
@@ -32,7 +35,12 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cursor_windows import CursorWindow, focus_window, list_windows
-from .key_control import press_enter, right_option_down, right_option_up
+from .key_control import (
+    press_cmd_z,
+    press_enter,
+    right_option_down,
+    right_option_up,
+)
 from .keystroke_watcher import KeystrokeWatcher
 
 PHONE_DIR = Path(__file__).resolve().parent.parent / "phone"
@@ -142,7 +150,8 @@ async def handle_hold_end() -> None:
     hold_duration = (
         release_ts - state.hold_start_ts if state.hold_start_ts else 0.0
     )
-    # Run the potentially-blocking settle wait in a thread.
+    # Block until Wispr has finished typing. Runs in a worker thread so we
+    # don't stall the event loop.
     await asyncio.to_thread(
         state.watcher.wait_for_typing_to_settle,
         release_ts,
@@ -151,7 +160,16 @@ async def handle_hold_end() -> None:
         2.5,
         ENTER_MAX_WAIT_S,
     )
+    # Tell the phone: Wispr is done, buttons can light up.
+    await broadcast({"type": "transcription_ready"})
+
+
+async def handle_submit() -> None:
     press_enter()
+
+
+async def handle_delete() -> None:
+    press_cmd_z()
 
 
 async def handle_select(index: int) -> None:
@@ -218,6 +236,10 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 await handle_hold_start()
             elif kind == "hold_end":
                 await handle_hold_end()
+            elif kind == "submit":
+                await handle_submit()
+            elif kind == "delete":
+                await handle_delete()
             elif kind == "switch_prev":
                 await handle_switch(-1)
             elif kind == "switch_next":
