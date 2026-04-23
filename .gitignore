@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# Auto-generated self-signed TLS cert. Regenerated on first run of
+# each machine, and whenever the LAN IP or Bonjour hostname changes.
+certs/
+
 # User-local preset overrides — defaults are baked into the Python
 # code and presets.example.json is the reference file. If you want
 # to customize presets without conflicting on git pulls, copy the

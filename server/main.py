@@ -66,8 +66,23 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .ax_focus import FocusSnapshot, compute_transcription, read_focus
+# Used for primary-display size + cursor warp. These live in Quartz
+# on modern pyobjc, but some shells expose them through different
+# submodules — import them best-effort so a stub install doesn't
+# take down the whole server.
+try:
+    from Quartz import (
+        CGDisplayBounds,
+        CGMainDisplayID,
+        CGWarpMouseCursorPosition,
+    )
+    _QUARTZ_DISPLAY_OK = True
+except Exception:  # pragma: no cover
+    _QUARTZ_DISPLAY_OK = False
+
+from .certs import ensure_cert
 from .cursor_windows import CursorWindow, focus_window, list_windows
+from .mouse_control import mouse_click, mouse_move_by, mouse_scroll
 from .key_control import (
     press_cmd_z,
     press_enter,
@@ -77,12 +92,12 @@ from .key_control import (
     type_string,
 )
 from .keystroke_watcher import KeystrokeWatcher
+from .peer import Peer, PeerWindow
 from .presets import Preset, load_presets
+from .virtual_cursor import ScreenLayout, VirtualCursor
 
 PHONE_DIR = Path(__file__).resolve().parent.parent / "phone"
 POLL_INTERVAL_S = 1.0
-ENTER_IDLE_MS = 400
-ENTER_MAX_WAIT_S = 8.0
 
 # Cursor keyboard behavior:
 #   Enter         → submit (may interrupt current agent run)
@@ -106,46 +121,95 @@ class State:
         # Track the selected window by title (identity), not index — macOS
         # reorders the window list whenever we focus something.
         self.selected_title: Optional[str] = None
+        self.selected_host: str = "mac"  # 'mac' | 'pc'
         self.clients: set[WebSocket] = set()
         self.watcher = KeystrokeWatcher()
         self.lock = asyncio.Lock()
         self.hold_start_ts: Optional[float] = None
-        self.baseline_focus: Optional[FocusSnapshot] = None
         # Presets are loaded once at startup. Users who edit
         # presets.json while the server is running can restart to pick
         # up changes.
         self.presets: list[Preset] = load_presets()
         self._presets_by_id: dict[str, Preset] = {p.id: p for p in self.presets}
+        # Peer (Windows PC) — created at startup if HC_PEER_URL is set.
+        self.peer: Optional[Peer] = None
+        # Virtual cursor — initialized in lifespan() once we know both
+        # screens' sizes. None until then.
+        self.vcur: Optional[VirtualCursor] = None
 
     def preset(self, preset_id: str) -> Optional[Preset]:
         return self._presets_by_id.get(preset_id)
 
+    def _all_windows(self) -> list[dict]:
+        """Unified list of Cursor windows from Mac + (optionally) PC.
+
+        Mac windows come first, then PC windows alphabetical. Each
+        entry is a small dict that matches what the phone expects:
+        ``{title, project, host}``. We derive project from title on
+        the PC side (same as Mac's AppleScript does).
+        """
+        out: list[dict] = []
+        for w in self.windows:
+            out.append({"title": w.title, "project": w.project, "host": "mac"})
+        if self.peer and self.peer.state.healthy:
+            for pw in self.peer.state.windows:
+                out.append(
+                    {
+                        "title": pw.title,
+                        "project": _project_from_title(pw.title),
+                        "host": "pc",
+                    }
+                )
+        return out
+
     def _selected_index(self) -> int:
-        if not self.windows:
+        """Index of the currently-selected card in the unified deck
+        (Mac windows then PC windows)."""
+        all_w = self._all_windows()
+        if not all_w:
             return -1
         if self.selected_title is not None:
-            for i, w in enumerate(self.windows):
-                if w.title == self.selected_title:
+            for i, w in enumerate(all_w):
+                if w["title"] == self.selected_title and w["host"] == self.selected_host:
                     return i
         return 0
 
-    def selected_window(self) -> Optional[CursorWindow]:
+    def selected_window(self) -> Optional[dict]:
+        """Return the currently-selected card as a dict with host info."""
         idx = self._selected_index()
         if idx < 0:
             return None
-        return self.windows[idx]
+        return self._all_windows()[idx]
 
     def to_payload(self) -> dict:
+        peer_info = None
+        if self.peer and self.peer.state.enabled:
+            peer_info = {
+                "configured": True,
+                "healthy": self.peer.state.healthy,
+                "hostname": self.peer.state.hostname,
+                "side": self.peer.state.side,
+            }
         return {
             "type": "state",
-            "windows": [
-                {"title": w.title, "project": w.project} for w in self.windows
-            ],
+            "windows": self._all_windows(),
             "selected": self._selected_index(),
             # Send only the public-safe view (id, label, submit mode) —
             # the actual prompt text stays server-side.
             "presets": [p.to_public_dict() for p in self.presets],
+            "peer": peer_info,
+            "cursor_host": self.vcur.host if self.vcur else "mac",
         }
+
+
+def _project_from_title(title: str) -> str:
+    """Heuristic: Cursor's window title is usually ``"file - project -
+    Cursor"``. Grab the middle segment; fall back to the whole title
+    if the format doesn't match."""
+    parts = [p.strip() for p in title.split(" - ")]
+    if len(parts) >= 3 and parts[-1].lower() == "cursor":
+        return parts[-2]
+    return title
 
 
 state = State()
@@ -195,185 +259,160 @@ async def poll_windows() -> None:
         await asyncio.sleep(POLL_INTERVAL_S)
 
 
+# --- Trackpad: virtual cursor dispatch --------------------------------------
+#
+# The phone always sends raw (dx, dy) deltas; we decide here whether
+# each delta affects the Mac cursor or the PC cursor based on the
+# virtual cursor position relative to the configured screen layout.
+
+
+async def _broadcast_cursor_host(host: str) -> None:
+    """Notify the phone that the cursor is now on `host` so the pad
+    UI can show the right label/accent color."""
+    await broadcast({"type": "cursor_host", "host": host})
+
+
+async def _dispatch_mouse_move(dx: float, dy: float) -> None:
+    vcur = state.vcur
+    peer = state.peer
+    peer_ok = bool(peer and peer.state.healthy)
+
+    # Single-host mode: no peer, just move the Mac cursor directly.
+    if vcur is None or not peer_ok or vcur.layout.pc_w == 0:
+        try:
+            mouse_move_by(dx, dy)
+        except Exception as exc:
+            print(f"[mouse_move] error: {exc}")
+        return
+
+    prev_host = vcur.host
+    new_host, local_x, local_y = vcur.apply_delta(dx, dy)
+    crossed = new_host != prev_host
+
+    if new_host == "mac":
+        if crossed:
+            # Just came back from PC — warp the native cursor to the
+            # correct Mac-side edge so it doesn't jump to wherever
+            # we left it before crossing.
+            ex, ey = vcur.mac_edge_on_cross_from_pc()
+            if _QUARTZ_DISPLAY_OK:
+                try:
+                    CGWarpMouseCursorPosition((ex, ey))
+                except Exception as exc:
+                    print(f"[vcur] mac warp failed: {exc}")
+            asyncio.create_task(_broadcast_cursor_host("mac"))
+        else:
+            try:
+                mouse_move_by(dx, dy)
+            except Exception as exc:
+                print(f"[mouse_move] error: {exc}")
+    else:  # new_host == "pc"
+        if crossed:
+            ex, ey = vcur.pc_edge_on_cross_from_mac()
+            # Warp PC cursor so it picks up at the matching edge row.
+            asyncio.create_task(peer.warp_cursor(ex, ey))  # type: ignore[union-attr]
+            # Also snug the Mac native cursor right to the edge so it
+            # doesn't visibly sit mid-screen during the crossing.
+            if _QUARTZ_DISPLAY_OK:
+                mx0, my0, mx1, my1 = vcur.layout.mac_box()
+                if vcur.layout.side == "left":
+                    edge_x = 0
+                elif vcur.layout.side == "right":
+                    edge_x = mx1 - mx0 - 1
+                elif vcur.layout.side == "above":
+                    edge_x = int(max(0, min(mx1 - mx0 - 1, vcur.x - mx0)))
+                else:
+                    edge_x = int(max(0, min(mx1 - mx0 - 1, vcur.x - mx0)))
+                if vcur.layout.side in ("left", "right"):
+                    edge_y = int(max(0, min(my1 - my0 - 1, vcur.y - my0)))
+                elif vcur.layout.side == "above":
+                    edge_y = 0
+                else:
+                    edge_y = my1 - my0 - 1
+                try:
+                    CGWarpMouseCursorPosition((edge_x, edge_y))
+                except Exception:
+                    pass
+            asyncio.create_task(_broadcast_cursor_host("pc"))
+        else:
+            # Fast-path: forward delta to PC. Fire-and-forget.
+            asyncio.create_task(peer.mouse_move(dx, dy))  # type: ignore[union-attr]
+
+
+async def _dispatch_mouse_click(button: str) -> None:
+    vcur = state.vcur
+    peer = state.peer
+    if vcur and vcur.host == "pc" and peer and peer.state.healthy:
+        await peer.mouse_click(button)
+    else:
+        await asyncio.to_thread(mouse_click, button)
+
+
+async def _dispatch_mouse_scroll(dx: float, dy: float) -> None:
+    vcur = state.vcur
+    peer = state.peer
+    if vcur and vcur.host == "pc" and peer and peer.state.healthy:
+        await peer.mouse_scroll(dx, dy)
+    else:
+        try:
+            mouse_scroll(dy, dx)
+        except Exception as exc:
+            print(f"[mouse_scroll] error: {exc}")
+
+
 async def handle_hold_start() -> None:
     state.hold_start_ts = time.monotonic()
     win = state.selected_window()
-    if win is not None:
-        focus_window(win.title)
-        # Give the WM a beat before pressing the modifier so focus has
-        # actually settled before we start reading AX attributes.
+    if win is None:
+        # No window selected — still fire the modifier so Wispr
+        # works regardless of focus state.
+        right_option_down()
+        return
+
+    if win["host"] == "pc" and state.peer and state.peer.state.healthy:
+        await state.peer.hold_start(title=win["title"])
+    else:
+        focus_window(win["title"])
+        # Give the WM a beat before pressing Right Option so Wispr
+        # activates against the intended window.
         await asyncio.sleep(0.08)
-
-    # Snapshot the currently focused text field. We'll diff against this
-    # after Wispr finishes so the phone can show what got transcribed.
-    state.baseline_focus = read_focus()
-    await broadcast(
-        {
-            "type": "focus_status",
-            "has_text_field": state.baseline_focus.has_text_field,
-            "role": state.baseline_focus.role,
-        }
-    )
-
-    # Begin capturing keystrokes from this moment on. Anything Wispr
-    # types after we release Right Option will land in the watcher's
-    # capture buffer — robust against Electron / WebKit fields whose
-    # AX value isn't readable, and against Wispr's "press enter"
-    # clearing the field before we can snapshot it.
-    state.watcher.start_capture(state.hold_start_ts)
-
-    right_option_down()
-
-
-_DEBUG_CAPTURE = os.environ.get("HC_DEBUG_CAPTURE", "").strip() not in ("", "0", "false", "False")
-
-
-def _wait_and_capture(release_ts: float, hold_duration: float) -> tuple[str, bool]:
-    """Wait for Wispr's typing to settle while polling the focused
-    text field at ~66 Hz.
-
-    Returns (longest_text_seen, auto_submitted).
-
-    Polling matters because of Wispr's built-in *"press enter"* voice
-    command: Wispr will type your message and then press Return, which
-    immediately clears the chat input in most apps. By remembering the
-    **longest** snapshot we ever saw — not just the latest — we can
-    still show the user what was dictated even if the field got
-    cleared a few milliseconds later. This also helps with Electron /
-    Cursor chat inputs where AXValue sometimes returns a short
-    mid-typing snapshot and then briefly returns empty before showing
-    the final value.
-
-    Set ``HC_DEBUG_CAPTURE=1`` for a per-poll log line so you can see
-    exactly what AX reported and when.
-    """
-    # 15 ms keeps us ahead of typical dictation-tool typing bursts
-    # (which land several chars per 50 ms) without burning measurable
-    # CPU. Worker thread only runs during hold_end, so even 60+ reads
-    # per second are cheap.
-    poll_s = 0.015
-    idle_s = ENTER_IDLE_MS / 1000.0
-    first_deadline = release_ts + max(2.5, hold_duration * 0.6)
-    hard_deadline = release_ts + ENTER_MAX_WAIT_S
-
-    longest_text: str = ""
-    poll_count = 0
-
-    def snapshot() -> None:
-        nonlocal longest_text, poll_count
-        snap = read_focus()
-        poll_count += 1
-        if _DEBUG_CAPTURE:
-            preview = (snap.text or "")[:60]
-            print(
-                f"[capture] poll #{poll_count:<3} "
-                f"has_field={snap.has_text_field} "
-                f"len={len(snap.text) if snap.text else 0:<3} "
-                f"text={preview!r}",
-                flush=True,
-            )
-        # Keep the longest snapshot we've ever seen so a mid-typing
-        # read survives the field being cleared by Wispr's Enter.
-        if snap.text and len(snap.text) > len(longest_text):
-            longest_text = snap.text
-
-    watcher = state.watcher
-
-    # Phase 1: wait for typing to start — either a keystroke or a
-    # growing AX value.
-    while time.monotonic() < first_deadline:
-        if watcher.active and watcher.last_keydown_ts > release_ts:
-            break
-        snapshot()
-        if longest_text:
-            break
-        time.sleep(poll_s)
-
-    # Phase 2: keep snapshotting until typing has been quiet for
-    # ``idle_s`` or we hit the hard deadline.
-    while True:
-        now = time.monotonic()
-        snapshot()
-        if now > hard_deadline:
-            break
-        if watcher.active:
-            if now - watcher.last_keydown_ts >= idle_s:
-                break
-        else:
-            extra = 0.4 + min(hold_duration * 0.3, 3.0)
-            if now - release_ts >= extra:
-                break
-        time.sleep(poll_s)
-
-    # Final snapshot after settle — catches any late arrivals.
-    snapshot()
-
-    auto_submitted = watcher.saw_return_since(release_ts)
-    if _DEBUG_CAPTURE:
-        print(
-            f"[capture] done polls={poll_count} longest_len={len(longest_text)} "
-            f"auto_submit={auto_submitted}",
-            flush=True,
-        )
-    return longest_text, auto_submitted
+        right_option_down()
 
 
 async def handle_hold_end() -> None:
-    right_option_up()
-    release_ts = time.monotonic()
-    hold_duration = (
-        release_ts - state.hold_start_ts if state.hold_start_ts else 0.0
+    win = state.selected_window()
+    on_pc = bool(
+        win and win["host"] == "pc" and state.peer and state.peer.state.healthy
     )
 
-    # Block until Wispr has finished typing while polling the AX text.
-    # Runs in a worker thread so we don't stall the event loop.
-    final_text, auto_submitted = await asyncio.to_thread(
-        _wait_and_capture, release_ts, hold_duration
-    )
-
-    # Two sources of transcription text, in priority order:
-    #   1. Characters recorded by the CGEventTap while Wispr was typing.
-    #      This survives Electron fields that don't expose AXValue and
-    #      Wispr's "press enter" which clears the input instantly.
-    #   2. AX diff of the focused field before vs after dictation.
-    #      Used as a fallback — only seen when the event tap captured
-    #      nothing (e.g. Wispr pasted rather than typed).
-    captured_keystrokes = state.watcher.stop_capture().strip()
-    baseline = state.baseline_focus or FocusSnapshot.empty()
-    ax_transcription = compute_transcription(baseline.text, final_text)
-    transcription = captured_keystrokes or ax_transcription
-
-    # Text field detection: treat as True if *any* signal says so —
-    # baseline AX check, keystrokes actually landing somewhere, or the
-    # AX diff producing a transcription. Electron apps regularly
-    # confuse the AX snapshot, so we err on the side of "user knows
-    # best" and only warn when nothing at all happened.
-    had_text_field = (
-        baseline.has_text_field
-        or bool(captured_keystrokes)
-        or bool(ax_transcription)
-        or auto_submitted
-    )
-
-    print(
-        f"[transcription] keystrokes={captured_keystrokes!r} "
-        f"ax={ax_transcription!r} "
-        f"auto_submit={auto_submitted} "
-        f"had_text_field={had_text_field}",
-        flush=True,
-    )
+    if on_pc:
+        auto_submitted = await state.peer.hold_end()  # type: ignore[union-attr]
+    else:
+        right_option_up()
+        release_ts = time.monotonic()
+        hold_duration = (
+            release_ts - state.hold_start_ts if state.hold_start_ts else 0.0
+        )
+        await asyncio.to_thread(
+            state.watcher.wait_for_typing_to_settle,
+            release_ts,
+            hold_duration,
+        )
+        auto_submitted = state.watcher.saw_return_since(release_ts)
 
     await broadcast(
         {
             "type": "transcription_ready",
-            "text": transcription,
-            "had_text_field": had_text_field,
             "auto_submitted": auto_submitted,
         }
     )
 
 
 async def handle_submit() -> None:
+    win = state.selected_window()
+    if win and win["host"] == "pc" and state.peer and state.peer.state.healthy:
+        await state.peer.submit()
+        return
     if QUEUE_INSTEAD_OF_INTERRUPT:
         press_option_enter()
     else:
@@ -381,6 +420,10 @@ async def handle_submit() -> None:
 
 
 async def handle_delete() -> None:
+    win = state.selected_window()
+    if win and win["host"] == "pc" and state.peer and state.peer.state.healthy:
+        await state.peer.delete()
+        return
     press_cmd_z()
 
 
@@ -406,27 +449,37 @@ async def handle_preset(preset_id: str) -> None:
         )
         return
 
-    focus_window(win.title)
-    # Let the WM actually transfer focus before we start firing keys.
-    await asyncio.sleep(0.12)
+    on_pc = win["host"] == "pc" and state.peer and state.peer.state.healthy
 
-    # Typing is blocking (~4ms per char × message length). Run in a
-    # worker thread so the event loop stays responsive and other
-    # clients (or another preset tap) don't queue up behind it.
-    await asyncio.to_thread(type_string, preset.text)
-
-    # Small beat so the app registers all typed chars before we submit.
-    await asyncio.sleep(0.05)
-
-    if preset.submit == "queue":
-        press_option_enter()
-    elif preset.submit == "send":
-        press_enter()
-    # "none" → just leave the text in the field
+    if on_pc:
+        await state.peer.focus_window(win["title"])  # type: ignore[union-attr]
+        await asyncio.sleep(0.12)
+        await state.peer.type_string(preset.text)  # type: ignore[union-attr]
+        await asyncio.sleep(0.05)
+        if preset.submit == "queue":
+            await state.peer.submit()  # type: ignore[union-attr]
+        elif preset.submit == "send":
+            await state.peer.press_enter()  # type: ignore[union-attr]
+    else:
+        focus_window(win["title"])
+        # Let the WM actually transfer focus before we start firing keys.
+        await asyncio.sleep(0.12)
+        # Typing is blocking (~4ms per char × message length). Run in a
+        # worker thread so the event loop stays responsive and other
+        # clients (or another preset tap) don't queue up behind it.
+        await asyncio.to_thread(type_string, preset.text)
+        # Small beat so the app registers all typed chars before we submit.
+        await asyncio.sleep(0.05)
+        if preset.submit == "queue":
+            press_option_enter()
+        elif preset.submit == "send":
+            press_enter()
+        # "none" → just leave the text in the field
 
     print(
-        f"[preset] {preset.label!r} → window={win.project!r} "
-        f"submit={preset.submit} chars={len(preset.text)}"
+        f"[preset] {preset.label!r} → [{win['host']}] "
+        f"window={win['project']!r} submit={preset.submit} "
+        f"chars={len(preset.text)}"
     )
     await broadcast(
         {
@@ -434,49 +487,143 @@ async def handle_preset(preset_id: str) -> None:
             "id": preset.id,
             "ok": True,
             "submit": preset.submit,
-            "window": win.project,
+            "window": win["project"],
+            "host": win["host"],
         }
     )
 
 
+async def _focus_selected(win: dict) -> None:
+    """Focus a window, routing to the correct host."""
+    if win["host"] == "pc" and state.peer and state.peer.state.healthy:
+        await state.peer.focus_window(win["title"])
+    else:
+        focus_window(win["title"])
+
+
 async def handle_select(index: int) -> None:
     async with state.lock:
-        if 0 <= index < len(state.windows):
-            win = state.windows[index]
-            state.selected_title = win.title
+        all_w = state._all_windows()
+        if 0 <= index < len(all_w):
+            win = all_w[index]
+            state.selected_title = win["title"]
+            state.selected_host = win["host"]
             await broadcast(state.to_payload())
         else:
             win = None
     if win is not None:
-        focus_window(win.title)
+        await _focus_selected(win)
 
 
 async def handle_switch(delta: int) -> None:
     async with state.lock:
-        if not state.windows:
+        all_w = state._all_windows()
+        if not all_w:
             return
         current = state._selected_index()
         if current < 0:
             current = 0
-        new_idx = (current + delta) % len(state.windows)
-        win = state.windows[new_idx]
-        state.selected_title = win.title
+        new_idx = (current + delta) % len(all_w)
+        win = all_w[new_idx]
+        state.selected_title = win["title"]
+        state.selected_host = win["host"]
         print(
             f"[switch] delta={delta:+d} {current} -> {new_idx} "
-            f"({win.project})"
+            f"([{win['host']}] {win['project']})"
         )
         await broadcast(state.to_payload())
-    focus_window(win.title)
+    await _focus_selected(win)
+
+
+def _mac_screen_size() -> tuple[int, int]:
+    """Primary Mac display size in points. Falls back to 1920x1080 if
+    Quartz isn't available (shouldn't happen on a normal install)."""
+    if not _QUARTZ_DISPLAY_OK:
+        return (1920, 1080)
+    try:
+        b = CGDisplayBounds(CGMainDisplayID())
+        return (int(b.size.width), int(b.size.height))
+    except Exception:
+        return (1920, 1080)
+
+
+async def _on_peer_windows_change() -> None:
+    """Called by the Peer when its window list changes; rebroadcasts
+    the merged deck so all connected phones update."""
+    async with state.lock:
+        # If the previously-selected PC window disappeared, fall back.
+        all_titles = {
+            (w["host"], w["title"]) for w in state._all_windows()
+        }
+        current = (state.selected_host, state.selected_title or "")
+        if current not in all_titles:
+            if state._all_windows():
+                first = state._all_windows()[0]
+                state.selected_title = first["title"]
+                state.selected_host = first["host"]
+            else:
+                state.selected_title = None
+                state.selected_host = "mac"
+        await broadcast(state.to_payload())
+
+
+def _init_virtual_cursor(mac_w: int, mac_h: int) -> VirtualCursor:
+    """Build the virtual cursor from current configuration.
+
+    Called at startup. If there's no peer yet, we use a 0x0 PC region
+    which effectively disables edge crossing — once the peer reports
+    its size we rebuild the layout.
+    """
+    peer = state.peer
+    if peer and peer.state.healthy:
+        pw, ph = peer.state.screen_w or 1920, peer.state.screen_h or 1080
+        side = peer.state.side
+    else:
+        # Pretend the PC is 0-wide so the layout math degenerates to
+        # Mac-only until the peer comes online.
+        pw, ph = 0, 0
+        side = peer.state.side if peer else "right"
+    layout = ScreenLayout(
+        mac_w=mac_w, mac_h=mac_h, pc_w=pw, pc_h=ph, side=side  # type: ignore[arg-type]
+    )
+    return VirtualCursor.centered_on_mac(layout)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     state.watcher.start()
+
+    mac_w, mac_h = _mac_screen_size()
+    state.peer = Peer.from_env(on_windows_change=_on_peer_windows_change)
+    if state.peer:
+        print(f"[peer] configured → {state.peer.state.base_url} (side={state.peer.state.side})")
+        await state.peer.start()
+
+    state.vcur = _init_virtual_cursor(mac_w, mac_h)
+
+    # Rebuild the virtual-cursor layout once the peer health comes in
+    # with real screen dimensions. Simple approach: check once a few
+    # seconds after startup.
+    async def _refresh_layout() -> None:
+        await asyncio.sleep(2.0)
+        if state.peer and state.peer.state.healthy:
+            state.vcur = _init_virtual_cursor(mac_w, mac_h)
+            print(
+                f"[vcur] layout updated: mac={mac_w}x{mac_h}, "
+                f"pc={state.peer.state.screen_w}x{state.peer.state.screen_h}, "
+                f"side={state.peer.state.side}"
+            )
+            await broadcast(state.to_payload())
+
     task = asyncio.create_task(poll_windows())
+    layout_task = asyncio.create_task(_refresh_layout())
     try:
         yield
     finally:
         task.cancel()
+        layout_task.cancel()
+        if state.peer:
+            await state.peer.stop()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -520,6 +667,161 @@ async def icon_512() -> FileResponse:
 @app.get("/favicon.ico")
 async def favicon() -> FileResponse:
     return FileResponse(PHONE_DIR / "icon-192.png", media_type="image/png")
+
+
+@app.get("/trust.crt")
+async def trust_crt() -> FileResponse:
+    """Serve the self-signed cert as a downloadable iOS configuration
+    profile. The ``application/x-x509-ca-cert`` MIME type is what
+    makes Safari on iOS show the "This website is trying to download
+    a configuration profile" prompt instead of just downloading a
+    random file. After the user taps Allow, iOS takes them straight
+    to the Profile Installation screen.
+
+    On Android (Chrome), the same MIME triggers the system Credential
+    Storage installer.
+
+    Safe to expose: a cert's public half is, by definition, public.
+    Nothing here leaks the private key — that lives in ``certs/server.key``
+    and is only used inside the uvicorn process.
+    """
+    from .certs import CERT_DIR
+
+    cert_path = CERT_DIR / "server.crt"
+    if not cert_path.exists():
+        # Shouldn't happen because ``main()`` generates the cert
+        # before uvicorn starts; guard anyway so a stale/broken state
+        # returns a clean 404 instead of an opaque 500.
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Cert not found")
+    return FileResponse(
+        cert_path,
+        media_type="application/x-x509-ca-cert",
+        filename="HandControl.crt",
+    )
+
+
+# Minimal HTML walkthrough for installing + trusting the cert. Kept
+# inline (not templated into a separate file) so the page works even
+# if something in ``phone/`` is broken, and so there's nothing extra
+# to ship/serve.
+_INSTALL_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#000000">
+  <title>Install Hand Control cert</title>
+  <style>
+    :root {
+      --bg: #000;
+      --panel: #0e0e0e;
+      --text: #f0f0f0;
+      --muted: #8a8a8a;
+      --accent: #f25f4c;
+      --accent-soft: rgba(242, 95, 76, 0.35);
+      --border: #1e1e1e;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+                   system-ui, sans-serif; }
+    body { padding: max(28px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right))
+                   max(28px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
+      max-width: 640px; margin: 0 auto; line-height: 1.55; }
+    h1 { font-size: 26px; font-weight: 800; letter-spacing: -0.01em;
+      margin: 0 0 8px; }
+    .lede { font-size: 15px; color: var(--muted); margin-bottom: 28px; }
+    .cta {
+      display: block; text-align: center; margin: 6px 0 22px;
+      padding: 18px 22px; font-size: 15px; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; text-decoration: none;
+      background: var(--accent); color: #000; border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(242, 95, 76, 0.25);
+      transition: transform 0.12s;
+    }
+    .cta:active { transform: scale(0.98); }
+    ol { padding-left: 20px; margin: 0; }
+    ol li { margin: 14px 0; }
+    ol li b { color: var(--text); }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px 20px; margin-bottom: 18px;
+    }
+    .tag {
+      display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      background: rgba(242, 95, 76, 0.12); color: var(--accent);
+      border: 1px solid var(--accent-soft); border-radius: 999px;
+      margin-right: 8px; vertical-align: 2px;
+    }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #181818; padding: 1px 6px; border-radius: 5px; font-size: 13px; }
+    a { color: var(--accent); }
+    .after {
+      margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border);
+      color: var(--muted); font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Install Hand Control certificate</h1>
+  <p class="lede">
+    One-time setup so Safari stops showing a "Not Private" warning
+    every time you open the remote.
+  </p>
+
+  <a class="cta" href="/trust.crt" download>Download cert</a>
+
+  <div class="panel">
+    <p><span class="tag">iPhone / iPad</span></p>
+    <ol>
+      <li>Tap <b>Download cert</b> above. When Safari asks
+        <i>"This website is trying to download a configuration
+        profile"</i>, tap <b>Allow</b>.</li>
+      <li>Open <b>Settings</b> → at the top you'll see
+        <b>Profile Downloaded</b>. Tap it.
+        (If it's not there: <b>Settings → General → VPN &amp; Device
+        Management</b> → <b>Hand Control</b>.)</li>
+      <li>Tap <b>Install</b> in the top-right, enter your passcode,
+        tap <b>Install</b> again when it warns about the profile
+        being unverified, and <b>Done</b>.</li>
+      <li>Go to <b>Settings → General → About → Certificate Trust
+        Settings</b>. Under "Enable full trust for root certificates",
+        toggle <b>Hand Control</b> <b>on</b>. Confirm.</li>
+      <li>Reload the Hand Control tab in Safari. No more warning.</li>
+    </ol>
+  </div>
+
+  <div class="panel">
+    <p><span class="tag">Android</span></p>
+    <ol>
+      <li>Tap <b>Download cert</b> above.</li>
+      <li>Open the file (or <b>Settings → Security → Encryption &amp;
+        credentials → Install a certificate → CA certificate</b>).</li>
+      <li>Accept the warning and install. The site will be trusted
+        immediately.</li>
+    </ol>
+  </div>
+
+  <p class="after">
+    The cert is generated locally by your Mac (<code>./certs/server.crt</code>),
+    never leaves your machine, and stays valid for 5 years. Reinstall
+    only if you rename your Mac (the Bonjour hostname in the cert
+    changes).
+  </p>
+</body>
+</html>
+"""
+
+
+@app.get("/install", response_class=HTMLResponse)
+async def install_page() -> HTMLResponse:
+    """Step-by-step page that walks the user through installing the
+    self-signed cert on their phone. Links to ``/trust.crt`` for the
+    actual download."""
+    return HTMLResponse(content=_INSTALL_HTML)
 
 
 @app.get("/presets")
@@ -577,6 +879,20 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 pid = msg.get("id")
                 if isinstance(pid, str):
                     await handle_preset(pid)
+            elif kind == "mouse_move":
+                dx = msg.get("dx")
+                dy = msg.get("dy")
+                if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
+                    await _dispatch_mouse_move(float(dx), float(dy))
+            elif kind == "mouse_click":
+                btn = msg.get("button")
+                if btn in ("left", "right"):
+                    await _dispatch_mouse_click(btn)
+            elif kind == "mouse_scroll":
+                dx = msg.get("dx") or 0
+                dy = msg.get("dy") or 0
+                if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
+                    await _dispatch_mouse_scroll(float(dx), float(dy))
             elif kind == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
     except WebSocketDisconnect:
@@ -680,17 +996,32 @@ def main() -> None:
     hostname = get_mdns_hostname()
     trusted = _check_accessibility()
 
+    # Generate (or reuse) a self-signed TLS cert. We use HTTPS so
+    # the phone PWA runs in a "secure context" (required for reliable
+    # bookmark + service-worker behavior on iOS) and so installing
+    # the cert once on the phone eliminates the per-launch warning.
+    try:
+        cert = ensure_cert()
+        use_https = True
+    except Exception as exc:
+        print(f"[certs] failed to generate TLS cert: {exc}")
+        print("[certs] falling back to HTTP")
+        cert = None
+        use_https = False
+
+    scheme = "https" if use_https else "http"
+
     print("\n" + "=" * 64)
     print("  Hand Control running.")
     print()
     if hostname:
-        print(f"  Phone URL (stable):  http://{hostname}:{port}")
-        print(f"  Phone URL (by IP):   http://{ip}:{port}")
+        print(f"  Phone URL (stable):  {scheme}://{hostname}:{port}")
+        print(f"  Phone URL (by IP):   {scheme}://{ip}:{port}")
         print()
         print(f"  Bookmark the stable URL on your phone — the .local")
         print(f"  hostname won't change when your Wi-Fi does.")
     else:
-        print(f"  Phone URL:  http://{ip}:{port}")
+        print(f"  Phone URL:  {scheme}://{ip}:{port}")
     print("=" * 64)
     if trusted:
         print("  Accessibility: OK (precise Enter timing enabled)")
@@ -699,15 +1030,72 @@ def main() -> None:
         print("  → System Settings → Privacy & Security → Accessibility")
         print("    Enable your terminal app, then restart this server.")
         print("  Using hold-duration heuristic for Enter timing until then.")
+    if use_https:
+        # Compose a pointer to /install using the stable hostname when
+        # we have one, or the raw IP otherwise.
+        install_host = hostname if hostname else ip
+        install_url = f"{scheme}://{install_host}:{port}/install"
+        print("=" * 64)
+        print("  ONE-TIME SETUP — kill the 'Not Private' warning:")
+        print(f"    Visit on your phone:  {install_url}")
+        print("    Follow the 4-step install (takes ~45 seconds).")
+        print("    After that Safari trusts the site permanently —")
+        print("    no more warnings on every launch.")
+        print()
+        print("  If you'd rather skip it (quick test, etc.):")
+        print("    Open the phone URL, tap 'Show Details' →")
+        print("    'Visit this website'. You'll re-see this prompt")
+        print("    on every future launch until you install the cert.")
     print("=" * 64 + "\n")
 
+    # Scannable QR of the phone URL. Point your phone camera at the
+    # terminal and tap the notification that pops up — beats typing a
+    # ``.local`` URL into Safari, especially on iOS where there's no
+    # history-based autocomplete for ``.local`` hosts.
+    phone_url = (
+        f"{scheme}://{hostname}:{port}" if hostname else f"{scheme}://{ip}:{port}"
+    )
     try:
-        uvicorn.run(
-            "server.main:app",
-            host="0.0.0.0",
-            port=port,
-            log_level="info",
+        import qrcode  # type: ignore
+
+        qr = qrcode.QRCode(
+            border=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
         )
+        qr.add_data(phone_url)
+        qr.make(fit=True)
+        print(f"  Scan with your phone camera → {phone_url}\n")
+        # ``invert=True`` draws dark modules as whitespace, which looks
+        # right on a dark terminal (the default on macOS). The half-
+        # block characters keep the QR compact — roughly 20 rows tall
+        # for a typical ``.local`` URL.
+        qr.print_ascii(invert=True)
+        print("")
+    except ImportError:
+        # qrcode is in requirements.txt but if someone is on an older
+        # install we don't want to crash. The URL is still printed in
+        # the banner so they can type it manually.
+        pass
+    except Exception as exc:
+        print(f"[qr] couldn't draw QR: {exc}")
+
+    try:
+        if use_https and cert is not None:
+            uvicorn.run(
+                "server.main:app",
+                host="0.0.0.0",
+                port=port,
+                log_level="info",
+                ssl_keyfile=str(cert.key_path),
+                ssl_certfile=str(cert.cert_path),
+            )
+        else:
+            uvicorn.run(
+                "server.main:app",
+                host="0.0.0.0",
+                port=port,
+                log_level="info",
+            )
     except KeyboardInterrupt:
         pass
 
