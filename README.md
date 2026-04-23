@@ -4,36 +4,114 @@
 
 Turn your phone into a touch-screen remote that lets you:
 
-1. See every open Cursor window as a tappable box.
-2. Pick which window you want to talk to.
-3. Press-and-hold a big button on your phone to dictate into it.
+1. See every open Cursor window as a swipeable card.
+2. Swipe to pick which window you want to talk to.
+3. Press-and-hold anywhere on the card to dictate into it.
 4. Let go — Wispr Flow transcribes and types into the window.
-5. The phone shows you the **transcribed text** (and warns if no text
-   field was actually focused — no more holding to talk into nothing).
-6. Two buttons at the bottom light up:
+5. Two buttons light up at the bottom:
    - **Submit** → presses Option+Enter (queues the message in Cursor)
    - **Delete** → presses Cmd+Z (undoes the dictation)
+6. If Wispr's "press enter" voice command auto-submits for you, the
+   phone shows a green "✓ Sent" confirmation and skips the buttons.
+7. Tap **Pad** in the header to flip the whole surface into a
+   **trackpad** — drag to move the Mac cursor, tap to click. Handy
+   when Cursor's chat input isn't focused and you need to click back
+   into it without walking back to the keyboard.
+8. Tap **Stick** in the header to turn the deck into a **virtual
+   joystick**. Touch anywhere on the deck to drop the stick's
+   origin there, drag to drive the Mac cursor (the farther you
+   drag, the faster the cursor moves), release to stop. A quick
+   tap without dragging is a left click. Toggle off to go back to
+   normal swipe-and-hold behavior.
 
 Your AirPods (connected to your Mac) are still the mic. The phone is just a
 remote control — **no audio ever goes over the network**.
 
 ---
 
-## Quick start
+## Quick start (Mac)
+
+### What you need
+
+- **macOS** 11 or newer
+- **Python 3.10+** — the installer will offer to install it for you
+  via Homebrew if it's missing
+- **[Cursor](https://cursor.com)** — the app Hand Control drives
+- **[Wispr Flow](https://wisprflow.ai)** — for the actual voice-to-
+  text; set its dictation hotkey to **Right Option**
+- **A phone** (iPhone or Android) on the same Wi-Fi as your Mac
+
+### Install
+
+Open Terminal, paste this:
 
 ```bash
 git clone https://github.com/samwudeliris-sys/hand-control.git
 cd hand-control
-./run.sh
+./install.sh
 ```
 
-On first run, grant **Accessibility** and **Automation** permissions when
-macOS prompts (full details in [Setup](#setup)), then open the `.local`
-URL the server prints on your phone. Add it to your home screen and you
-have a landscape remote control app for dictating into Cursor.
+The installer is a 6-step guided walkthrough — Python check, deps
+install, cert pre-generation, `Hand Control.app` bundle build,
+Wispr Flow detection, and macOS Accessibility prompt. Everything
+is idempotent — rerun any time.
 
-**Requires:** macOS, Python 3.10+, Cursor, Wispr Flow (or any hold-to-talk
-dictation tool), and a phone on the same Wi-Fi.
+### Launch
+
+Cmd+Space → type **Hand Control** → Return. A Terminal window opens
+with a QR code. Scan it with your iPhone camera and tap the
+notification to open the phone remote.
+
+**One-time on your phone (~45 seconds)** — stop Safari nagging
+"Not Private" on every launch:
+
+1. Visit `https://<your-mac>.local:8000/install` (the banner on
+   the Mac prints the exact URL).
+2. Tap **Download cert** → Safari asks if you want to download a
+   configuration profile → **Allow**.
+3. Open **Settings** → at the top tap **Profile Downloaded** →
+   **Install** → passcode → **Install** → **Done**.
+4. **Settings → General → About → Certificate Trust Settings** →
+   toggle **Hand Control** on.
+
+Reload the Hand Control tab. Warning gone forever. Tap the
+Safari share icon → **Add to Home Screen** for a proper app icon.
+
+**That's it.** Swipe between Cursor windows, press-and-hold to
+dictate, tap **Submit** to queue the message in Cursor.
+
+Right-click the Dock icon → *Options → Keep in Dock* for one-click
+future launches.
+
+### Running from the terminal directly
+
+You can still do `./run.sh` from the repo directory — that's what
+the `.app` calls internally, and is useful for debugging.
+
+---
+
+## Want to control a Windows PC too?
+
+If you also have a PC next to your Mac, Hand Control can drive both
+from the same phone remote — one unified deck of Cursor windows
+from both machines, and a trackpad that edge-crosses between them.
+
+On the **PC**, clone the repo and run:
+
+```
+peer\install.bat
+```
+
+That sets up Python deps, creates a Start Menu + Desktop shortcut,
+and prints the two lines you paste into your **Mac's** Terminal
+before `./run.sh`:
+
+```bash
+export HC_PEER_URL=http://<PC-hostname>:8001
+export HC_PC_SIDE=left    # or right / above / below
+```
+
+See the full walkthrough in **"Two-machine mode (Mac + PC)"** below.
 
 ---
 
@@ -81,211 +159,310 @@ touch-and-hold on your phone while you keep your eyes on your Mac screen.
 When you hold on the phone:
 
 1. Server focuses the currently-selected Cursor window (AppleScript).
-2. Server reads the **focused text field** via macOS's Accessibility
-   API and snapshots its value as a baseline. If no text field is
-   focused, the phone shows a red "No text field focused" chip so you
-   can cancel before you waste the breath.
-3. Server presses and holds **Right Option** — Wispr Flow's activation
+2. Server presses and holds **Right Option** — Wispr Flow's activation
    hotkey.
-4. You talk. Your AirPods send audio to your Mac. Wispr transcribes.
-5. You release on the phone. Server releases Right Option.
-6. A global `CGEventTap` watches keystrokes. When Wispr has been quiet
-   for 400ms (i.e., finished typing), the server reads the focused
-   text field **again** and diffs it against the baseline — the delta
-   is what Wispr just typed.
-7. The server sends the transcription to the phone. You see exactly
-   what got inserted, displayed in a scrollable preview card. The
-   Submit / Delete buttons light up.
-8. You tap one:
+3. You talk. Your AirPods send audio to your Mac. Wispr transcribes.
+4. You release on the phone. Server releases Right Option.
+5. A global `CGEventTap` watches keystrokes. When Wispr has been quiet
+   for 400ms (i.e., finished typing), the server tells the phone the
+   Submit / Delete buttons are ready. For apps that don't route
+   dictated text through visible keystrokes (Cursor's chat input, most
+   Electron apps), the server falls back to a heuristic delay based on
+   how long you held — typically 0.4–2s.
+6. You tap one:
    - **Submit** → server presses **Option+Enter** — Cursor's
      "queue message" shortcut. If the agent is busy, your message
      is appended to the queue to run after the current task finishes.
      If the agent is idle, it just submits normally.
    - **Delete** → server presses Cmd+Z to undo Wispr's insertion.
+7. If Wispr's "press enter" voice command auto-submitted for you
+   (i.e. you said "...press enter" at the end of your dictation), the
+   server notices the Return keystroke and the phone shows a green
+   "✓ Sent via 'press enter'" confirmation instead — no buttons to tap.
 
 If you'd rather have Submit interrupt the current agent run, set
 `QUEUE_INSTEAD_OF_INTERRUPT = False` in `server/main.py` to fall back
 to plain Enter.
 
-The transcription preview and focus warning both require **Accessibility
-permission** (the same one the keystroke watcher needs). If the
-permission is missing the rest of the app still works; you just won't
-get the preview or the "no text field" warning.
+> **Why no transcription preview on the phone?**
+> An earlier version of Hand Control tried to show the transcribed
+> text on the phone by reading Cursor's chat input via the macOS
+> Accessibility API. Cursor (like most Electron apps) hides its text
+> content from external AX observers, and Wispr's text insertion
+> doesn't always generate visible keystrokes. The result was false
+> "no text detected" warnings on dictations that actually worked.
+> Rather than show unreliable data, the phone now just shows the
+> Submit / Delete buttons and trusts you to glance at your Mac.
 
 ---
 
-## Requirements
+## Setup reference
 
-- **macOS** (Apple Silicon or Intel). Uses AppleScript, CoreGraphics,
-  CGEventTap — all macOS-only APIs.
-- **Python 3.10+** (3.11 or newer recommended).
-- **[Cursor](https://cursor.com)** — this is built around focusing Cursor
-  windows. Could be adapted to any app with light changes.
-- **[Wispr Flow](https://wisprflow.ai)** — or any dictation tool that
-  activates on a hold-to-talk hotkey and types into the focused window.
-- **A phone** on the same Wi-Fi network. Any phone with a modern browser
-  (iOS Safari / Android Chrome).
+The **Quick start** above is the path most people should follow.
+Below is the longer-form detail if something goes sideways or you
+want to understand what's happening.
 
----
+### macOS permissions in detail
 
-## Setup
+Hand Control needs two macOS permissions. `install.sh` opens the
+Accessibility pane for you; the Automation prompt appears the
+first time you launch.
 
-> Tip: you can run every command below by pasting it into Terminal.
+**1. Accessibility** — *System Settings → Privacy & Security →
+Accessibility.* Enable the terminal app you launched `./run.sh` or
+`Hand Control.app` from (Terminal.app, iTerm, etc.). This is what
+lets the server simulate key presses on your behalf. If you don't
+see the app listed, run `./run.sh` once first to trigger the prompt,
+then enable it and restart the server.
 
-### 1. Clone and install
+**2. Automation → System Events** — the first time Hand Control
+lists your Cursor windows, macOS will prompt: *"Terminal wants
+access to control System Events."* Click **OK**. If you accidentally
+click Don't Allow, fix it at *System Settings → Privacy & Security →
+Automation → your terminal → enable System Events.*
 
-```bash
-git clone https://github.com/samwudeliris-sys/hand-control.git
-cd hand-control
-./run.sh
-```
+### Wispr Flow configuration
 
-`run.sh` will:
+- **Activation hotkey** → `Right Option` (the Alt/Option key on the
+  right side of your keyboard). Chosen because it's a single
+  physical key, rarely bound to anything else, and cleanly
+  simulatable programmatically (unlike `Fn`).
+- **Input device** → your AirPods, or "System default" if your
+  AirPods are already the Mac's default mic.
 
-- Create a Python virtualenv in `.venv/`
-- Install dependencies (`fastapi`, `uvicorn`, `pyobjc`)
-- Start the server on port **8000**
+### The HTTPS cert, in more detail
 
-Leave it running. The first start will print something like:
+The server uses HTTPS with a self-signed cert so the phone PWA runs
+in a "secure context" (required for reliable bookmark/service-worker
+behavior on iOS). `install.sh` pre-generates the cert so the
+`/install` cert-trust flow works the first time you open the URL.
 
-```
-Hand Control running.
+The cert is a self-signed CA (`basicConstraints: CA:TRUE`) — this
+is what makes iOS's **Certificate Trust Settings** toggle actually
+enable full SSL trust for the installed profile. It's stored in
+`./certs/server.crt` on your Mac, valid for 5 years, and only
+regenerated if your Mac's Bonjour hostname changes. Switching
+Wi-Fi networks does **not** invalidate the cert.
 
-  Phone URL (stable):  http://MacBook-Air.local:8000
-  Phone URL (by IP):   http://192.168.1.42:8000
+### Stable URL
 
-  Bookmark the stable URL on your phone — the .local
-  hostname won't change when your Wi-Fi does.
-```
+The banner prints a stable `.local` URL like
+`https://MacBook-Air.local:8000`. That's your Mac's Bonjour/mDNS
+hostname — it stays the same across networks and DHCP renewals.
+Bookmark it once on your phone and it keeps working.
 
-Use the **stable URL** (the `.local` one) — it uses your Mac's
-Bonjour/mDNS hostname and stays the same across networks and
-DHCP renewals. You can bookmark it once and forget about it.
+### Add to Home Screen
 
-### 2. Configure Wispr Flow
-
-Open Wispr Flow settings and change:
-
-- **Activation hotkey** → `Right Option` (the Option/Alt key on the right
-  side of your keyboard).
-- **Input device** → your AirPods, or "System default" if your AirPods are
-  already the Mac's default mic.
-
-The Right Option key is used because (a) it's a single physical key,
-perfect for press-and-hold, (b) it's rarely bound to anything else, and
-(c) unlike `Fn`, it can be cleanly simulated programmatically.
-
-### 3. Grant macOS permissions
-
-The server simulates key presses and watches global keystrokes, so it
-needs two permissions.
-
-#### A. Accessibility
-
-> **System Settings → Privacy & Security → Accessibility**
-
-Enable the app you launched `./run.sh` from (Terminal.app, iTerm, or
-Cursor's built-in terminal).
-
-If you don't see it listed, try running `./run.sh` once first — macOS may
-prompt you automatically.
-
-After granting, **restart the server** (`Ctrl+C` and `./run.sh` again).
-
-#### B. Automation → System Events
-
-The first time the server lists your Cursor windows, macOS will prompt:
-
-> "Terminal.app wants access to control System Events."
-
-Click **OK**. (If you accidentally click Don't Allow, fix it at
-**System Settings → Privacy & Security → Automation** → your terminal →
-enable "System Events".)
-
-### 4. Open the phone UI
-
-On your phone's browser, open the **stable URL** the server printed, e.g.:
-
-```
-http://MacBook-Air.local:8000
-```
-
-(Substitute your Mac's own hostname, shown in the startup banner.)
-
-Hold your phone in **landscape**.
-
-### 5. Add to Home Screen (recommended)
-
-In Safari (iOS) or Chrome (Android), tap the Share button → **Add to
-Home Screen**. Hand Control has a proper PWA manifest, so launching
-from the home screen icon:
+In Safari, tap the Share button → **Add to Home Screen**. Hand
+Control has a proper PWA manifest, so launching from the home
+screen icon:
 
 - opens **fullscreen** (no browser bars)
 - **locks to landscape**
 - uses the app icon and name "Hand Control"
 
-From then on, it's just an icon on your home screen — tap, hold, talk.
+If you had an old HTTP bookmark from a previous version, remove it
+and re-add from the new `https://…` URL.
 
 ---
 
 ## Using it
 
-The phone UI:
+The phone UI has two modes toggled by the **Deck** / **Pad** tabs in
+the top-right of the header.
+
+### Deck mode (dictate)
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ ●  [ project-a ] [ project-b ] [ project-c ]        │   ← top strip: tap to pick
+│ ● CONNECTED     [DECK][pad]        ━━ ○ ○ ○        │   ← status · tabs · pager
 │ (Push) (Continue) (Fix) (Tests) (Plan) (Approve)    │   ← preset pills
 ├─────┬─────────────────────────────────────────┬─────┤
-│     │  Listening…  (red chip if no text field)│     │
-│  ◀  │          HOLD TO TALK                   │  ▶  │
 │     │                                         │     │
-│     │   After release:                        │     │
-│     │   ┌───────────────────────────────────┐ │     │
-│     │   │ TRANSCRIPTION                     │ │     │
-│     │   │ "make the button bigger and       │ │     │
-│     │   │  add a tooltip"                   │ │     │
-│     │   └───────────────────────────────────┘ │     │
+│peek │                                         │ peek│
+│ ◂▬▸ │            PROJECT-A                    │ ◂▬▸ │
+│     │                                         │     │
+│     │           ●   hold to talk              │     │
+│     │                                         │     │
 │     ├──────────────────┬──────────────────────┤     │
-│     │     DELETE       │       SUBMIT         │     │
-│     │      (✕)         │        (↵)           │     │
+│     │      DELETE      │       SUBMIT         │     │
+│     │       (✕)        │        (↵)           │     │
 └─────┴──────────────────┴──────────────────────┴─────┘
 ```
 
-- **Top strip** — one box per open Cursor window. Tap to select.
-- **Preset pills** — one-tap canned prompts (see
+- **Pager dots** (top right) — one dot per Cursor window, active dot
+  stretches into an accent-colored pill. Tap a dot to jump directly.
+- **Preset pills** (below status bar) — one-tap canned prompts (see
   [Presets](#presets) below). Fully customizable.
-- **Left edge (◀)** — previous window.
-- **Right edge (▶)** — next window.
-- **Center area** — press and hold to dictate. While holding, if
-  macOS reports no text field is focused a red chip appears — release
-  and click into Cursor's chat box before trying again.
-- **Transcription preview** — after you release, the text Wispr
-  transcribed appears in a scrollable card so you can review it
-  without looking at your Mac. If Wispr typed into nothing, the
-  card turns red and tells you why.
+- **Card deck** (main area) — one full-bleed card per Cursor window.
+  Adjacent cards peek at the edges so you always know there's more.
+  - **Swipe horizontally** → glide to the previous / next card.
+  - **Press and hold** anywhere on the card → dictate into that window.
+    A short (~140 ms) commit delay disambiguates swipe from hold
+    automatically; it feels instant.
+  - When you hold, the active card glows accent-red and a pulse
+    ripples outward so you can tell at a glance the mic is live.
 - **Bottom buttons** — light up after Wispr finishes typing:
   - **Delete (✕)** — tap to undo (Cmd+Z).
   - **Submit (↵)** — tap to send Option+Enter.
+- **Green "✓ Sent" pill** — appears inside the card when Wispr's
+  "press enter" voice command already submitted the message, then
+  auto-dismisses after a few seconds.
 
-Selecting any window also raises that Cursor window to the front on your
-Mac, so you always know which one you're about to dictate to.
+Changing card — whether by swipe or pager-dot tap — also raises that
+Cursor window to the front on your Mac, so you always see which one
+you're about to dictate to.
 
 While waiting for Wispr to finish, the buttons pulse; once ready, they
 become solid and tappable.
 
+### Pad mode (trackpad)
+
+Tap **Pad** in the header to turn the phone into a trackpad for the
+Mac cursor. Useful when Cursor's chat input has lost focus — a quick
+tap to click it back, then flip to Deck and keep dictating.
+
+```
+┌─────────────────────────────────────────────────────┐
+│ ● CONNECTED     [deck][PAD]                         │
+├─────────────────────────────────────────────────────┤
+│  ╭───────────────────────────────────────────────╮  │
+│  │                                               │  │
+│  │              · · · · · · · · · · ·            │  │
+│  │                                               │  │
+│  │                 TRACKPAD                      │  │
+│  │      drag to move · tap to click              │  │
+│  │           two fingers to scroll               │  │
+│  │                                               │  │
+│  │              · · · · · · · · · · ·            │  │
+│  │                                               │  │
+│  ╰───────────────────────────────────────────────╯  │
+├──────────────────┬──────────────────────────────────┤
+│     L-CLICK      │          R-CLICK                 │
+└──────────────────┴──────────────────────────────────┘
+```
+
+- **Drag** anywhere on the pad → moves the Mac cursor (sensitivity ≈ 2×).
+- **Tap** (quick down-up, no drag) → left click at the cursor's position.
+- **Two-finger drag** → scroll (follows macOS natural-scroll direction).
+- **L-Click / R-Click** buttons at the bottom → explicit left / right
+  click. Always available; handy when you want to right-click without
+  a second finger.
+
+Pad mode cleanly suspends any in-flight dictation (releases Right
+Option, resets the post-dictation state), so flipping between modes
+is always safe.
+
+### Joystick mode (on the Deck page)
+
+Tap the **Stick** pill in the header (next to the Deck / Pad tabs
+while you're on the Deck page). The deck turns into a virtual
+joystick — think of it as a dedicated left-stick surface, no
+calibration, no sensors, no nonsense.
+
+- **Touch anywhere on the deck** → the stick's origin drops right
+  under your thumb (you see a translucent ring + center nub).
+- **Drag out from the origin** → the Mac cursor moves in that
+  direction at a speed proportional to how far you've dragged
+  (ease-in curve, so small offsets feel gentle and full-throw
+  gives you top speed). There's a small dead zone around the
+  origin to keep a resting thumb from sliding the cursor.
+- **Release** → stick disappears, cursor stops immediately.
+- **Quick tap without dragging** → left click at the current
+  cursor position.
+- **Tap Stick again** → toggle off; cards return to swipe + hold.
+
+Under the hood, the phone computes a per-frame pixel delta based
+on the current stick offset (`RAF` at ~60/120 Hz) and ships
+`{type:'mouse_move', dx, dy}` messages to the Mac, which posts them
+as `kCGEventMouseMoved` events. Same wire format and server code
+path as Pad mode — the only thing new is the on-deck input.
+
+Swipe-to-change-card and hold-to-dictate are suspended while
+joystick is on (the deck is a dedicated control surface). Use the
+**pager dots** at the top-right of the header to switch cards, or
+toggle the stick off.
+
 ---
+
+## Two-machine mode (Mac + PC)
+
+Running Hand Control on a **Mac + Windows PC sitting side by side** turns
+the phone into a universal controller. Key abilities:
+
+- **Unified card deck** — Cursor windows from *both* machines appear in
+  the same swipeable deck, each tagged with a `MAC` or `PC` badge. Hold
+  to dictate works on either machine (each runs its own Wispr Flow).
+- **Edge-crossing trackpad** — in Pad mode, drag the Mac cursor off
+  the configured edge and it seamlessly picks up on the PC. A pill in
+  the corner of the trackpad (`MAC` / `PC`) shows which machine
+  currently owns the cursor.
+- **Preset prompts** — one-tap presets fire against whichever card
+  you have selected, on whichever machine it lives on.
+
+### Setup
+
+1. **Clone** the repo on *both* machines (same branch).
+
+2. **On the Windows PC**, one-command install:
+
+   ```
+   peer\install.bat
+   ```
+
+   It checks Python (with a helpful download link if missing),
+   creates the venv, installs `fastapi`, `pynput`, `pywin32`,
+   creates Start Menu + Desktop shortcuts for the peer, and prints
+   the exact two lines to paste on your Mac.
+
+   Then configure **Wispr Flow on Windows** to use **Right Alt**
+   as its dictation hotkey (Settings → Shortcuts → Dictation).
+   Launch the peer by clicking the new **Hand Control Peer**
+   desktop shortcut (or run `peer\run.bat`).
+
+3. **On the Mac**, paste the two lines the PC printed, then run:
+
+   ```bash
+   export HC_PEER_URL=http://<PC-hostname>:8001
+   export HC_PC_SIDE=left      # or right / above / below
+   ./run.sh
+   ```
+
+4. **On your phone:** reload the PWA. You'll see `MAC` / `PC`
+   badges on every card in the deck, and Pad mode will show a
+   `MAC` / `PC` pill indicating which machine currently owns
+   the cursor.
+
+### Network basics
+
+Both machines must be on the **same LAN**. Use the PC hostname if
+Bonjour is installed on the PC (e.g. via iTunes or Spotify), or a
+static LAN IP otherwise. The peer agent prints both options at
+startup.
+
+### Optional: shared-secret auth
+
+For shared living spaces, set the same `HC_PEER_TOKEN` on both
+machines. The Mac sends it as a header; the PC rejects requests
+without it. Skip this on a home network.
 
 ## Configuration
 
 ### Change the "Wispr is done" detection delay
 
-Edit `server/main.py`:
+Edit the defaults on `KeystrokeWatcher.wait_for_typing_to_settle` in
+`server/keystroke_watcher.py`:
 
 ```python
-ENTER_IDLE_MS = 400     # how long Wispr must be quiet before buttons light up
-ENTER_MAX_WAIT_S = 8.0  # safety cap — give up waiting after this
+idle_ms=400,              # how long Wispr must be quiet before buttons light up
+first_key_timeout_s=2.5,  # give up waiting for the first keystroke after this
+max_wait_s=10.0,          # hard cap on total wait
 ```
+
+When the event tap can see Wispr's keystrokes, these knobs control when
+the Submit / Delete buttons appear. When it can't (Cursor's chat input,
+most Electron apps), the server falls back to a heuristic
+`0.4s + 30% of hold duration` instead.
 
 ### Change the activation hotkey
 
@@ -368,7 +545,7 @@ Each preset is an object:
 You can also point to a preset file outside the repo with
 `HC_PRESETS_PATH=/path/to/my-presets.json ./run.sh`.
 
-To debug a custom file, hit `http://<mac>.local:8000/presets` from any
+To debug a custom file, hit `https://<mac>.local:8000/presets` from any
 browser on your LAN to see exactly what the server loaded.
 
 ---
@@ -379,8 +556,9 @@ browser on your LAN to see exactly what the server loaded.
 Accessibility permission isn't granted, or the terminal binary that's
 actually running Python doesn't have it. Check System Settings →
 Accessibility, make sure your terminal app is enabled, then restart the
-server. If Enter never fires, the event tap isn't running — the hard cap
-(`ENTER_MAX_WAIT_S`) will still eventually fire Enter.
+server. Without the event tap, the server falls back to a heuristic
+delay before lighting up the Submit / Delete buttons — it still works,
+just less precisely.
 
 **Phone shows "No Cursor windows detected".**
 Either Cursor isn't running, or Automation permission for System Events
@@ -391,6 +569,39 @@ and enable "System Events" under your terminal.
 Make sure both devices are on the same Wi-Fi. Some guest / corporate
 networks isolate clients — try a personal hotspot to confirm. macOS
 firewall may also need to allow incoming connections to Python.
+
+**Phone says "This Connection Is Not Private" every single launch.**
+That's Safari not trusting the self-signed cert. Permanent fix:
+open **`https://<your-mac>.local:8000/install`** on the phone and
+follow the 4-step install (see the note under the "Open it on your
+phone" step, above). After the cert is installed and fully trusted,
+Safari never nags again. The cert lives in `./certs/` on your Mac,
+never leaves your machine, is marked as a self-signed CA (so iOS's
+Certificate Trust Settings toggle actually enables SSL trust for
+it), and stays valid for 5 years. It's only regenerated if your
+Mac's Bonjour hostname changes — adding a new Wi-Fi network does
+**not** invalidate your installed cert.
+
+**I installed the cert but Safari still shows the warning.**
+Two common causes: (1) you installed the profile but didn't enable
+full trust. Go to **Settings → General → About → Certificate Trust
+Settings** and toggle **Hand Control** on. (2) You renamed your
+Mac (which changes the `.local` hostname) after installing the
+cert. The cert gets regenerated — delete the old Hand Control
+profile in **Settings → General → VPN & Device Management** and
+re-run the `/install` flow.
+
+**Joystick nub doesn't appear when I touch the deck.**
+Make sure the **Stick** pill is lit (accent color, filled dot).
+If it's off, the deck is in its normal swipe/hold mode. Also
+confirm you're on the **Deck** tab, not **Pad** — the stick is
+deck-only, since the Pad tab already provides a full trackpad.
+
+**Cursor moves but in the wrong direction.**
+The joystick is rate-based and relative: drag direction from your
+touch origin = cursor direction. If you expected "touch a spot,
+cursor jumps there", that's not this mode — use the **Pad** tab
+for absolute-style dragging.
 
 **Server says "Port 8000 is already in use."**
 Another process is bound to that port (possibly a stale Hand Control).
@@ -407,8 +618,9 @@ Wispr Flow isn't running, or its hotkey isn't `Right Option`. Double-check
 the hotkey in Wispr's settings.
 
 **Submit button lights up too early or too late.**
-Adjust `ENTER_IDLE_MS` in `server/main.py`. For slower / longer
-transcriptions, try 600–800ms.
+Adjust the defaults on `wait_for_typing_to_settle` in
+`server/keystroke_watcher.py`. For slower / longer transcriptions, try
+`idle_ms=600` — `800`.
 
 **Delete doesn't fully remove the dictation.**
 Delete sends Cmd+Z (undo), which works if Wispr pastes text in one shot.
@@ -429,11 +641,21 @@ server/
   cursor_windows.py        AppleScript: list + focus Cursor windows
   key_control.py           CoreGraphics: simulate keys (Right Option,
                            Enter, Option+Enter, Cmd+Z, Unicode typing)
-  keystroke_watcher.py     CGEventTap: detect when Wispr stops typing,
-                           capture transcribed characters live
-  ax_focus.py              Accessibility API: snapshot focused text field
-                           (transcription preview + "no text field" warning)
+  keystroke_watcher.py     CGEventTap: detect when Wispr stops typing
+                           and when Wispr auto-presses Return
+  mouse_control.py         CoreGraphics: simulate cursor moves, clicks,
+                           and scroll wheel events (trackpad mode)
+  peer.py                  HTTP client for the Windows peer agent
+                           (window polling, mouse forwarding, dictation)
+  virtual_cursor.py        Virtual cursor state for cross-machine
+                           edge crossing (Mac + PC unified coords)
   presets.py               Load + validate one-tap preset prompts
+peer/
+  main.py                  FastAPI app (runs on the Windows PC)
+  windows_ops.py           Windows port of keys / mouse / windows /
+                           keystroke watcher (pynput + pywin32)
+  run.bat                  Windows bootstrap — venv + deps + server
+  requirements.txt         Windows-specific dependencies
 phone/
   index.html               Single-file landscape remote UI
   manifest.json            PWA manifest (fullscreen, landscape-locked)
