@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import datetime
 import ipaddress
+import json
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 try:
     from cryptography import x509
@@ -65,6 +66,76 @@ def _get_mdns_hostname() -> str:
     return ""
 
 
+def get_tailscale_sans() -> Tuple[List[str], List[str]]:
+    """Hostnames and IPs to add to the TLS cert for Tailscale access.
+
+    When the phone reaches the Mac over Tailscale (MagicDNS or 100.x),
+    the hostname and IP must appear in the cert SANs or Safari shows a
+    warning. Auto-detected from ``tailscale status --json`` when the
+    daemon is running.
+
+    Override / supplement with environment variables (comma-separated)::
+
+        HC_TAILSCALE_DNS=my-mac.tailabc.ts.net
+        HC_TAILSCALE_IP=100.64.0.1
+    """
+    dns: List[str] = []
+    ips: List[str] = []
+
+    raw_dns = os.environ.get("HC_TAILSCALE_DNS", "").strip()
+    if raw_dns:
+        for part in raw_dns.split(","):
+            h = part.strip().rstrip(".")
+            if h and h not in dns:
+                dns.append(h)
+    raw_ip = os.environ.get("HC_TAILSCALE_IP", "").strip()
+    if raw_ip:
+        for part in raw_ip.split(","):
+            p = part.strip()
+            if p and p not in ips:
+                ips.append(p)
+
+    try:
+        r = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return dns, ips
+        data = json.loads(r.stdout)
+        self_info = data.get("Self") or {}
+        name = (self_info.get("DNSName") or "").strip().rstrip(".")
+        if name and name not in dns:
+            dns.append(name)
+        for tip in self_info.get("TailscaleIPs") or []:
+            s = str(tip).strip()
+            if s and s not in ips:
+                ips.append(s)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+        pass
+
+    # Fallback when JSON omits IPs but the CLI still knows them.
+    if not ips:
+        try:
+            r = subprocess.run(
+                ["tailscale", "ip", "-4"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                for line in r.stdout.strip().splitlines():
+                    s = line.strip()
+                    if s and s not in ips:
+                        ips.append(s)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    return dns, ips
+
+
 def _get_lan_ip() -> str:
     """Best-effort: whatever interface the OS would use to reach the
     public internet. That's nearly always the one your phone sees too."""
@@ -94,6 +165,14 @@ def _collect_sans() -> tuple[List[str], List[str]]:
     lan = _get_lan_ip()
     if lan and lan not in ips:
         ips.append(lan)
+
+    ts_dns, ts_ips = get_tailscale_sans()
+    for h in ts_dns:
+        if h not in hostnames:
+            hostnames.append(h)
+    for tip in ts_ips:
+        if tip not in ips:
+            ips.append(tip)
 
     return hostnames, ips
 
@@ -192,7 +271,7 @@ def _write_new_cert(
     cn = next((h for h in hostnames if h != "localhost"), "localhost")
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, cn),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Hand Control"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Blind Monkey"),
     ])
 
     san_entries: list[x509.GeneralName] = [x509.DNSName(h) for h in hostnames]

@@ -9,46 +9,46 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Hand Control" />
+<meta name="apple-mobile-web-app-title" content="Blind Monkey" />
 <meta name="theme-color" content="#000000" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="apple-touch-icon" href="/icon-180.png" />
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
 <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
-<title>Hand Control</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/config.js"></script>
+<title>Blind Monkey</title>
 <style>
   :root {
     --bg: #000;
-    --bg-card: #0f0f0f;
-    --bg-card-active: #161616;
+    --panel: #0f0f0f;
+    --panel-2: #141414;
     --fg: #fff;
-    --muted: #6b6b6b;
-    --muted-2: #333;
-    --accent: #ff4d1f;
-    --accent-soft: rgba(255, 77, 31, 0.18);
-    --accent-glow: rgba(255, 77, 31, 0.55);
-    --accent-bg: #1a0d08;
+    --muted: #7f7f7f;
+    --muted-2: #3b3b3b;
+    --accent: #ff5b2e;
+    --accent-soft: rgba(255, 91, 46, 0.2);
+    --accent-glow: rgba(255, 91, 46, 0.55);
+    --accent-bg: #1c0d08;
     --green: #1ec67a;
-    --green-dim: #0d4027;
-    --red: #d94a26;
-    --red-dim: #3f1810;
-    --card-radius: 20px;
+    --green-dim: #103a26;
+    --red: #de5a38;
+    --red-dim: #411910;
+    --radius: 24px;
   }
 
   * {
     box-sizing: border-box;
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
-    -webkit-user-select: none;
-    user-select: none;
     touch-action: manipulation;
   }
 
   html, body {
     margin: 0;
     padding: 0;
-    height: 100%;
     width: 100%;
+    height: 100%;
     background: var(--bg);
     color: var(--fg);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif;
@@ -56,288 +56,111 @@
     overscroll-behavior: none;
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
-    touch-action: manipulation;
   }
 
   body {
     display: flex;
     flex-direction: column;
-    height: 100dvh;
+    min-height: 100dvh;
   }
 
-  /* ------------- Header ------------- */
+  button,
+  textarea {
+    font: inherit;
+  }
+
   header {
     flex: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: max(10px, env(safe-area-inset-top))
+    padding: max(12px, env(safe-area-inset-top))
              max(14px, env(safe-area-inset-right))
-             6px
+             10px
              max(14px, env(safe-area-inset-left));
   }
 
   .status {
     display: flex;
     align-items: center;
-    gap: 7px;
-    font-size: 10px;
-    letter-spacing: 0.12em;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--muted);
   }
+
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: #444;
     transition: background 0.25s;
   }
+
   .dot.ok { background: var(--green); }
   .dot.bad { background: var(--red); }
+  .dot.wait { background: #c9a227; }
 
-  /* Pager dots — iOS-style "app switcher" style pill for the active
-     card, round dots for the inactive ones. Tap to jump. */
-  .pager {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 10px;
-  }
-  .pager-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--muted-2);
-    transition: background 0.25s, width 0.25s, border-radius 0.25s;
-    cursor: pointer;
-  }
-  .pager-dot.active {
-    width: 22px;
-    border-radius: 3px;
-    background: var(--accent);
-  }
-  .pager.hidden { display: none; }
-
-  /* ------------- Mode tabs (Deck / Pad) ------------- */
-  .mode-tabs {
-    display: flex;
-    gap: 4px;
-    padding: 3px;
-    background: #0d0d0d;
-    border: 1px solid #1c1c1c;
-    border-radius: 999px;
-  }
-  .mode-tab {
-    padding: 5px 12px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: #777;
-    background: transparent;
-    border: none;
-    border-radius: 999px;
-    transition: background 0.18s, color 0.18s;
-    cursor: pointer;
-    min-width: 54px;
-  }
-  .mode-tab.active {
-    background: var(--accent);
-    color: #000;
-  }
-  .mode-tab:active:not(.active) {
-    color: #ccc;
-  }
-
-  /* Hide the joystick chip in pad mode — joystick is deck-only. */
-  body[data-app-mode="pad"] .joy-chip {
-    display: none !important;
-  }
-
-  /* ------------- Joystick toggle chip (deck only) -------------
-     When ON, the deck becomes a virtual-joystick surface. Touch
-     anywhere to drop the stick's origin at that point, drag to
-     steer the cursor (rate control with a dead zone), release to
-     stop. A quick tap (no drag) is a left click. */
-  .joy-chip {
-    padding: 5px 10px 5px 8px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: #777;
-    background: #0d0d0d;
-    border: 1px solid #1c1c1c;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: color 0.18s, background 0.18s, border-color 0.18s;
-    cursor: pointer;
-    user-select: none;
-  }
-  .joy-chip .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #333;
-    transition: background 0.18s, box-shadow 0.18s;
-  }
-  .joy-chip.on {
-    color: var(--accent);
-    background: rgba(242, 95, 76, 0.12);
-    border-color: var(--accent-soft);
-  }
-  .joy-chip.on .dot {
-    background: var(--accent);
-    box-shadow: 0 0 8px rgba(242, 95, 76, 0.7);
-  }
-
-  /* Deck overlay while joystick is active: hint at bottom. */
-  .joy-overlay {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
+  .onboarding-strip {
+    flex: 0 0 auto;
     display: none;
-    align-items: flex-end;
-    justify-content: center;
-    padding-bottom: 10px;
+    gap: 10px;
+    flex-wrap: wrap;
     font-size: 10px;
-    letter-spacing: 0.18em;
+    font-weight: 600;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--accent);
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
-    z-index: 3;
+    color: var(--muted);
+    padding: 0 max(14px, env(safe-area-inset-right)) 8px max(14px, env(safe-area-inset-left));
   }
-  body.joy-on .joy-overlay { display: flex; }
-  body.joy-on .card .pulse,
-  body.joy-on .card .blob { opacity: 0; }
-  body.joy-on .card.active {
-    border-color: var(--accent-soft);
-    background: linear-gradient(180deg, #141414 0%, #0e0e0e 100%);
-  }
-  /* Hide the card track entirely while driving the joystick so
-     the deck reads as a dedicated control surface. The selected
-     card's title stays visible as the page header. */
-  body.joy-on .track {
-    opacity: 0.25;
-    pointer-events: none;
-    transition: opacity 0.2s;
+  .onboarding-strip.show { display: flex; }
+  .onboarding-strip span.ok { color: var(--green); }
+  .onboarding-strip span.bad { color: var(--red); }
+  .onboarding-strip span.muted { color: #555; }
+
+  .app {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+    padding:
+      0 max(14px, env(safe-area-inset-right))
+      max(14px, env(safe-area-inset-bottom))
+      max(14px, env(safe-area-inset-left));
   }
 
-  /* ------------- Joystick visuals -------------------------
-     Rendered absolutely inside #deck, centered on the touch
-     point when active. Both layers are pointer-events:none so
-     they don't steal the active pointer. */
-  .joy-ring,
-  .joy-nub {
-    position: absolute;
-    pointer-events: none;
-    transform: translate(-50%, -50%);
-    z-index: 4;
-    opacity: 0;
-    transition: opacity 0.15s;
+  .panel {
+    min-height: 0;
+    background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
+    border: 1px solid #1d1d1d;
+    border-radius: var(--radius);
+    overflow: hidden;
+    position: relative;
   }
-  .joy-ring {
-    width: 160px;
-    height: 160px;
-    border-radius: 50%;
-    border: 2px solid rgba(242, 95, 76, 0.35);
-    background: radial-gradient(circle,
-                  rgba(242, 95, 76, 0.05) 0%,
-                  rgba(242, 95, 76, 0.12) 55%,
-                  rgba(242, 95, 76, 0.0) 72%);
-    box-shadow: 0 0 40px rgba(242, 95, 76, 0.18) inset;
-  }
-  .joy-ring::before {
-    /* Inner dashed ring that marks the dead zone. Inside this
-       radius the joystick doesn't emit motion — keeps the cursor
-       still when your thumb is on the center dot. */
+
+  .panel::before {
     content: "";
     position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 40px;
-    height: 40px;
-    border: 1px dashed rgba(242, 95, 76, 0.35);
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
+    inset: 0;
+    background: radial-gradient(circle at top center, rgba(255, 255, 255, 0.035), transparent 50%);
+    pointer-events: none;
   }
-  .joy-nub {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, #ff7f6b 0%, #d85040 60%, #a63a2d 100%);
-    box-shadow:
-      0 0 18px rgba(242, 95, 76, 0.6),
-      0 2px 8px rgba(0, 0, 0, 0.6),
-      inset 0 -4px 8px rgba(0, 0, 0, 0.35);
-  }
-  .joy-ring.show,
-  .joy-nub.show { opacity: 1; }
 
-  /* ------------- Preset pills ------------- */
-  .presets {
-    flex: 0 0 auto;
+  .listen-panel {
     display: flex;
-    gap: 6px;
-    padding: 0 max(14px, env(safe-area-inset-right))
-            6px max(14px, env(safe-area-inset-left));
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-    touch-action: pan-x;
+    flex-direction: column;
+    padding: 14px;
     min-height: 0;
   }
-  .presets::-webkit-scrollbar { display: none; }
-  .presets.hidden { display: none; }
 
-  .preset {
-    flex: 0 0 auto;
-    padding: 7px 13px;
-    margin: 2px 0;
-    border-radius: 999px;
-    background: #121212;
-    border: 1px solid #1c1c1c;
-    color: #c8c8c8;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-    transition: background 0.1s, color 0.1s, transform 0.1s, border-color 0.15s;
-  }
-  .preset:active {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    color: var(--fg);
-    transform: scale(0.96);
-  }
-  .preset.firing {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #000;
-  }
-  .preset.flash-ok {
-    background: var(--green-dim);
-    border-color: var(--green);
-    color: var(--green);
-  }
-  .preset.flash-err {
-    background: var(--red-dim);
-    border-color: var(--red);
-    color: var(--red);
-  }
-
-  /* ------------- Card deck (main area) ------------- */
   .deck {
-    flex: 1;
-    position: relative;
+    flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
-    padding: 6px max(4px, env(safe-area-inset-right))
-             6px max(4px, env(safe-area-inset-left));
+    position: relative;
     touch-action: none;
   }
 
@@ -345,501 +168,630 @@
     display: flex;
     height: 100%;
     align-items: stretch;
-    /* Spring-ish easing — settles fast then glides into place. */
     transition: transform 380ms cubic-bezier(0.22, 0.9, 0.28, 1);
     will-change: transform;
   }
+
   .track.dragging {
     transition: none;
   }
 
   .card {
-    flex: 0 0 auto;        /* width set by JS from measured deck size */
+    flex: 0 0 auto;
     height: 100%;
     margin: 0 6px;
-    padding: 22px 28px;
-    background: var(--bg-card);
-    border: 1px solid #1c1c1c;
-    border-radius: var(--card-radius);
+    padding: 16px 18px 14px;
+    background: linear-gradient(180deg, #151515 0%, #101010 100%);
+    border: 1px solid #202020;
+    border-radius: 22px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 14px;
+    justify-content: space-between;
+    gap: 12px;
     position: relative;
     overflow: hidden;
     opacity: 0.45;
     transform: scale(0.92);
-    /* During dragging this transition is still active — that's fine,
-       the scale/opacity interpolation between peeking and active
-       looks smooth. */
-    transition: background 0.25s, border-color 0.25s,
-                opacity 0.3s cubic-bezier(0.22, 0.9, 0.28, 1),
-                transform 0.3s cubic-bezier(0.22, 0.9, 0.28, 1);
+    transition:
+      background 0.25s,
+      border-color 0.25s,
+      opacity 0.3s cubic-bezier(0.22, 0.9, 0.28, 1),
+      transform 0.3s cubic-bezier(0.22, 0.9, 0.28, 1);
   }
+
   .card.active {
     opacity: 1;
     transform: scale(1);
-    background: var(--bg-card-active);
+  }
+
+  .card.switch-flash {
+    border-color: rgba(255, 91, 46, 0.55);
+    box-shadow: 0 0 0 1px rgba(255, 91, 46, 0.14), inset 0 0 34px -18px rgba(255, 91, 46, 0.38);
+    animation: switch-flash 260ms ease-out;
   }
 
   .card.empty {
     border-style: dashed;
-    border-color: #222;
-  }
-  .card.empty .project { color: var(--muted); }
-  .card.empty .hint { color: var(--muted-2); }
-
-  /* Mode-specific styles (apply to the .active card only) */
-  .card.holding {
-    background: var(--accent-bg);
-    border-color: var(--accent);
-    box-shadow: 0 0 60px -10px var(--accent-glow) inset;
-  }
-  .card.holding .project { color: #ffeae3; }
-  .card.holding .hint {
-    color: var(--accent);
-    font-weight: 600;
+    border-color: #2b2b2b;
+    justify-content: center;
+    gap: 10px;
   }
 
-  .card.waiting .hint { color: var(--accent); }
-
-  .card.ready {
-    border-color: #2e2e2e;
-  }
-  .card.ready .hint {
-    color: #aaa;
-  }
-
-  .card.sent .project { font-size: 15px; opacity: 0.5; }
-  .card.sent .hint { display: none; }
-  .card.sent .blob { display: none; }
-
-  .card .project {
-    font-size: 30px;
+  .host-badge {
+    align-self: flex-end;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 48px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 10px;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(255, 91, 46, 0.08);
+    border: 1px solid var(--accent-soft);
+  }
+
+  .host-badge[data-host="pc"] {
+    color: var(--green);
+    border-color: rgba(30, 198, 122, 0.35);
+    background: rgba(30, 198, 122, 0.08);
+  }
+
+  body[data-has-peer="0"] .host-badge {
+    display: none;
+  }
+
+  .card-project {
+    width: 100%;
     text-align: center;
-    max-width: 100%;
+    font-size: clamp(19px, 3vw, 26px);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-    transition: color 0.2s, font-size 0.3s, opacity 0.3s;
   }
 
-  /* Host badge — tiny pill in the top-right corner of each card
-     telling you whether this window lives on your Mac or your PC.
-     Hidden automatically when the server has no peer configured
-     (single-machine mode), via the [data-has-peer="0"] rule below. */
-  .card .host-badge {
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    padding: 3px 8px;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: #888;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid #232323;
-    border-radius: 999px;
-    pointer-events: none;
-    transition: color 0.2s, border-color 0.2s, background 0.2s;
-  }
-  .card .host-badge[data-host="mac"] {
-    color: var(--accent);
-    border-color: var(--accent-soft);
-    background: rgba(242, 95, 76, 0.08);
-  }
-  .card .host-badge[data-host="pc"] {
-    color: var(--green);
-    border-color: rgba(39, 201, 63, 0.35);
-    background: rgba(39, 201, 63, 0.08);
-  }
-  body[data-has-peer="0"] .card .host-badge { display: none; }
-
-  .card .hint {
-    font-size: 11px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--muted);
-    transition: color 0.2s;
-  }
-
-  .card .blob {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--muted);
-    transition: background 0.25s, transform 0.3s, box-shadow 0.3s;
-    position: relative;
-    z-index: 1;
-  }
-  .card.holding .blob {
-    background: var(--accent);
-    transform: scale(1.8);
-    box-shadow: 0 0 30px 4px var(--accent-glow);
-  }
-  .card.waiting .blob {
-    background: var(--accent);
-    animation: blob-pulse 1s ease-in-out infinite;
-    transform: scale(1.2);
-  }
-
-  @keyframes blob-pulse {
-    0%, 100% { opacity: 0.35; }
-    50%      { opacity: 1;    }
-  }
-
-  /* Pulse rings radiate out from the center while holding. */
-  .card .pulse {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 100px;
-    height: 100px;
-    border-radius: 50%;
-    background: var(--accent-soft);
-    transform: translate(-50%, -50%) scale(0);
-    opacity: 0;
-    pointer-events: none;
-  }
-  .card.holding .pulse {
-    animation: pulse-out 1.5s ease-out infinite;
-  }
-
-  @keyframes pulse-out {
-    0%   { transform: translate(-50%, -50%) scale(0.3); opacity: 0.7; }
-    80%  { transform: translate(-50%, -50%) scale(6);   opacity: 0;   }
-    100% { transform: translate(-50%, -50%) scale(6);   opacity: 0;   }
-  }
-
-  /* ------------- Trackpad (pad mode) ------------- */
-  .trackpad {
-    flex: 1;
-    position: relative;
+  .card-center {
+    flex: 1 1 auto;
     min-height: 0;
-    margin: 6px max(10px, env(safe-area-inset-right))
-            6px max(10px, env(safe-area-inset-left));
-    background: radial-gradient(ellipse at center, #141414 0%, #0a0a0a 80%);
-    border: 1px solid #1f1f1f;
-    border-radius: 20px;
-    overflow: hidden;
+    width: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 16px;
+  }
+
+  .card-status {
+    font-size: clamp(24px, 4vw, 34px);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    text-align: center;
+  }
+
+  .transcribe-bars {
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+  }
+
+  .transcribe-bars span {
+    display: block;
+    width: 6px;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255, 91, 46, 0.9);
+    box-shadow: 0 0 12px rgba(255, 91, 46, 0.2);
+    transform-origin: center bottom;
+    animation: transcribe-bars 0.95s ease-in-out infinite;
+  }
+
+  .transcribe-bars span:nth-child(2) { animation-delay: 0.08s; }
+  .transcribe-bars span:nth-child(3) { animation-delay: 0.16s; }
+  .transcribe-bars span:nth-child(4) { animation-delay: 0.24s; }
+
+  .card.waiting .transcribe-bars {
+    display: flex;
+  }
+
+  .card.holding {
+    border-color: var(--accent);
+    background: linear-gradient(180deg, #221008 0%, #180c07 100%);
+    box-shadow: inset 0 0 60px -12px var(--accent-glow);
+  }
+
+  .card.waiting {
+    border-color: var(--accent-soft);
+    background: linear-gradient(180deg, #19110e 0%, #14100d 100%);
+  }
+
+  .card.sent .card-status {
+    opacity: 0.45;
+  }
+
+  .card.empty .card-project,
+  .card.empty .card-status {
+    color: #8b8b8b;
+  }
+
+  .hold-ring {
+    width: 104px;
+    height: 104px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.08);
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.07) 0%, transparent 68%);
+    position: relative;
+  }
+
+  .hold-ring::before,
+  .hold-ring::after {
+    content: "";
+    position: absolute;
+    inset: 50%;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+  }
+
+  .hold-ring::before {
+    width: 42px;
+    height: 42px;
+    background: #4a4a4a;
+    transition: background 0.18s, box-shadow 0.18s, transform 0.18s;
+  }
+
+  .card.holding .hold-ring::before {
+    background: var(--accent);
+    box-shadow: 0 0 28px 2px var(--accent-glow);
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+
+  .card.waiting .hold-ring::before {
+    background: var(--accent);
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  .meter {
+    width: min(300px, 78%);
+    height: 7px;
+    border-radius: 999px;
+    background: rgba(255, 91, 46, 0.12);
+    overflow: hidden;
+  }
+
+  .meter-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+    transition: width 60ms linear;
+  }
+
+  .review {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: none;
+    flex-direction: column;
     gap: 10px;
-    color: var(--muted);
+    padding: 12px;
+    border-radius: 18px;
+    border: 1px solid #272727;
+    background: linear-gradient(180deg, rgba(20, 20, 20, 0.98) 0%, rgba(10, 10, 10, 0.98) 100%);
+  }
+
+  .review.active { display: flex; }
+
+  .review-text {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    border: 1px solid #282828;
+    border-radius: 18px;
+    background: #090909;
+    color: var(--fg);
+    padding: 14px 16px;
+    font-size: 17px;
+    line-height: 1.4;
+    resize: none;
+    outline: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: auto;
+    caret-color: var(--fg);
+  }
+
+  .review-text:focus {
+    border-color: var(--accent-soft);
+  }
+
+  .review.error .review-text {
+    color: #ffd0c3;
+    border-color: rgba(222, 90, 56, 0.45);
+    background: rgba(222, 90, 56, 0.08);
+  }
+
+  .review-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .action-btn {
+    flex: 1;
+    border: none;
+    border-radius: 16px;
+    padding: 14px 16px;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform 0.16s, opacity 0.16s, background 0.16s, color 0.16s;
+  }
+
+  .action-btn:active {
+    transform: scale(0.985);
+  }
+
+  .action-delete {
+    background: var(--red-dim);
+    color: var(--red);
+  }
+
+  .action-submit {
+    background: var(--green-dim);
+    color: var(--green);
+  }
+
+  .action-submit:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .review {
+    position: absolute;
+    inset: 0;
+    margin: 14px;
+    z-index: 3;
+  }
+
+  .sent-pill {
+    display: none;
+    position: absolute;
+    right: 16px;
+    top: 16px;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--green);
+    background: rgba(13, 64, 39, 0.92);
+    color: var(--green);
     font-size: 11px;
+    font-weight: 800;
     letter-spacing: 0.12em;
     text-transform: uppercase;
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  .sent-pill.show { display: flex; }
+
+  .record-cancel {
+    position: absolute;
+    right: 18px;
+    top: 50%;
+    width: 42px;
+    height: 42px;
+    border: 1px solid rgba(222, 90, 56, 0.45);
+    border-radius: 50%;
+    background: rgba(222, 90, 56, 0.16);
+    color: var(--red);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    transform: translateY(-50%) scale(0.92);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s, transform 0.16s, background 0.16s;
+    z-index: 2;
+  }
+
+  .card.holding .record-cancel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(-50%) scale(1);
+  }
+
+  .record-cancel:active {
+    background: rgba(222, 90, 56, 0.28);
+    transform: translateY(-50%) scale(0.96);
+  }
+
+  .trackpad-panel {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .trackpad-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .trackpad-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .trackpad-hint {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  .trackpad {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
+    border-radius: 20px;
+    border: 1px solid #1f1f1f;
+    background: radial-gradient(ellipse at center, #151515 0%, #0a0a0a 82%);
+    overflow: hidden;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
   }
 
-  .trackpad .label {
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    color: #888;
-    transition: color 0.25s;
+  .trackpad::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, #1b1b1b 1px, transparent 1.5px);
+    background-size: 28px 28px;
+    background-position: center;
+    opacity: 0.75;
+    pointer-events: none;
   }
-  .trackpad .sub {
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    color: #444;
-    text-align: center;
-    line-height: 1.6;
-    max-width: 70%;
-  }
-  .trackpad.active .label { color: var(--accent); }
-  .trackpad.active { border-color: var(--accent-soft); }
 
-  /* Which machine currently owns the virtual cursor. Pill floats
-     in the top-right of the pad. Swaps color when crossing. */
+  .trackpad-guide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+    color: #7f7f7f;
+    pointer-events: none;
+  }
+
+  .trackpad-guide strong {
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9b9b9b;
+  }
+
+  .trackpad-guide span {
+    font-size: 11px;
+    line-height: 1.5;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #5f5f5f;
+  }
+
+  .trackpad.active {
+    border-color: var(--accent-soft);
+  }
+
   .pad-host {
     position: absolute;
     top: 10px;
     right: 12px;
     padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--accent-soft);
+    background: rgba(0, 0, 0, 0.56);
+    color: var(--accent);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.18em;
-    color: var(--accent);
-    background: rgba(0, 0, 0, 0.55);
-    border: 1px solid var(--accent-soft);
-    border-radius: 999px;
+    text-transform: uppercase;
     transition: color 0.2s, border-color 0.2s;
     pointer-events: none;
   }
+
   .pad-host[data-host="pc"] {
     color: var(--green);
-    border-color: rgba(39, 201, 63, 0.45);
-  }
-  /* Hide when there's no peer configured — no point in a "MAC"
-     badge when that's the only option. */
-  .trackpad[data-peer="off"] .pad-host { display: none; }
-
-  /* Subtle dot-grid texture to signal "this is draggable" */
-  .trackpad::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image: radial-gradient(circle, #1a1a1a 1px, transparent 1.5px);
-    background-size: 28px 28px;
-    background-position: center;
-    opacity: 0.7;
-    pointer-events: none;
+    border-color: rgba(30, 198, 122, 0.45);
   }
 
-  /* Ripple / touch indicator — a soft orange dot where the finger
-     currently is. JS positions it via CSS vars. */
+  .trackpad[data-peer="off"] .pad-host {
+    display: none;
+  }
+
   .pad-touch {
     position: absolute;
     width: 90px;
     height: 90px;
     border-radius: 50%;
-    background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
-    pointer-events: none;
+    background: radial-gradient(circle, rgba(255, 91, 46, 0.2) 0%, transparent 72%);
     opacity: 0;
     transform: translate(-50%, -50%) scale(0.6);
-    transition: opacity 0.25s, transform 0.25s;
     top: var(--touch-y, 50%);
     left: var(--touch-x, 50%);
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
   }
+
   .pad-touch.show {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
   }
 
-  /* --- Mode-scoped visibility ---
-     The app element flips a data attribute between 'deck' and 'pad';
-     everything shows/hides accordingly. */
-  body[data-app-mode="deck"] .trackpad { display: none; }
-  body[data-app-mode="pad"]  .deck     { display: none; }
-  body[data-app-mode="pad"]  .presets  { display: none; }
-  body[data-app-mode="pad"]  .pager    { display: none; }
-
-  /* Bottom-action labels swap between Delete/Submit (deck mode) and
-     L-Click / R-Click (pad mode). Both are always present in the DOM;
-     CSS controls visibility so the swap is zero-flicker. */
-  .action-btn .label-deck,
-  .action-btn .label-pad { display: none; }
-  body[data-app-mode="deck"] .action-btn .label-deck { display: block; }
-  body[data-app-mode="pad"]  .action-btn .label-pad  { display: block; }
-
-  /* In pad mode, both action buttons are always enabled (they're
-     click buttons, not post-dictation actions). */
-  body[data-app-mode="pad"] .action-btn.delete {
-    background: var(--red-dim);
-    color: var(--red);
-    pointer-events: auto;
-    animation: none;
-  }
-  body[data-app-mode="pad"] .action-btn.delete:active {
-    background: var(--red);
-    color: #fff;
-    transform: scale(0.98);
-  }
-  body[data-app-mode="pad"] .action-btn.submit {
-    background: var(--green-dim);
-    color: var(--green);
-    pointer-events: auto;
-    animation: none;
-  }
-  body[data-app-mode="pad"] .action-btn.submit:active {
-    background: var(--green);
-    color: #000;
-    transform: scale(0.98);
-  }
-
-  /* "Sent via press enter" confirmation pill — replaces hint / blob
-     on the active card for a few seconds. */
-  .sent-pill {
-    display: none;
-    padding: 10px 18px;
-    background: var(--green-dim);
-    border: 1px solid var(--green);
-    border-radius: 999px;
-    color: var(--green);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    animation: sent-in 0.3s ease-out;
-  }
-  .card.sent .sent-pill { display: inline-block; }
-
-  @keyframes sent-in {
-    from { transform: scale(0.7); opacity: 0; }
-    to   { transform: scale(1);   opacity: 1; }
-  }
-
-  /* ------------- Bottom actions ------------- */
-  .actions {
-    flex: 0 0 auto;
-    display: flex;
-    border-top: 1px solid #0e0e0e;
-    min-height: 86px;
-  }
-
-  .action-btn {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    background: #0a0a0a;
-    color: #333;
-    border: none;
-    transition: background 0.12s, color 0.12s, transform 0.08s;
-    pointer-events: none;
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  .action-btn .icon {
-    font-size: 19px;
-    line-height: 1;
-  }
-
-  .action-btn.delete + .action-btn.submit {
-    border-left: 1px solid #0e0e0e;
-  }
-
-  .action-btn.delete.enabled {
-    background: var(--red-dim);
-    color: var(--red);
-    pointer-events: auto;
-  }
-  .action-btn.delete.enabled:active {
-    background: var(--red);
-    color: #fff;
-    transform: scale(0.98);
-  }
-
-  .action-btn.submit.enabled {
-    background: var(--green-dim);
-    color: var(--green);
-    pointer-events: auto;
-  }
-  .action-btn.submit.enabled:active {
-    background: var(--green);
-    color: #000;
-    transform: scale(0.98);
-  }
-
-  .actions.waiting .action-btn {
-    animation: btn-pulse 1.4s ease-in-out infinite;
-  }
-  @keyframes btn-pulse {
+  @keyframes pulse {
     0%, 100% { opacity: 0.4; }
-    50%      { opacity: 1;   }
+    50% { opacity: 1; }
+  }
+
+  @keyframes transcribe-bars {
+    0%, 100% {
+      height: 10px;
+      opacity: 0.45;
+      transform: scaleY(0.65);
+    }
+    50% {
+      height: 26px;
+      opacity: 1;
+      transform: scaleY(1);
+    }
+  }
+
+  @keyframes switch-flash {
+    0% {
+      transform: scale(0.975);
+      box-shadow: 0 0 0 0 rgba(255, 91, 46, 0.22), inset 0 0 50px -18px rgba(255, 91, 46, 0.55);
+    }
+    100% {
+      transform: scale(1);
+      box-shadow: 0 0 0 1px rgba(255, 91, 46, 0.14), inset 0 0 34px -18px rgba(255, 91, 46, 0.38);
+    }
   }
 </style>
 </head>
-<body>
+<body data-has-peer="0">
   <header>
     <div class="status">
       <span class="dot" id="dot"></span>
       <span id="statusText">connecting</span>
     </div>
-    <div class="mode-tabs" id="modeTabs">
-      <button class="mode-tab active" data-app-mode="deck" type="button">Deck</button>
-      <button class="mode-tab" data-app-mode="pad" type="button">Pad</button>
-    </div>
-    <div style="position:relative;">
-      <button class="joy-chip" id="joyChip" type="button" aria-pressed="false">
-        <span class="dot"></span>
-        <span>Stick</span>
-      </button>
-    </div>
-    <div class="pager" id="pager"></div>
   </header>
-
-  <div class="presets hidden" id="presets"></div>
-
-  <div class="deck" id="deck">
-    <div class="track" id="track"></div>
-    <div class="joy-ring" id="joyRing"></div>
-    <div class="joy-nub"  id="joyNub"></div>
-    <div class="joy-overlay">Drag to move · Tap to click</div>
+  <div class="onboarding-strip" id="onboardingStrip" aria-label="Setup checklist">
+    <span class="muted" id="ckSignIn">Sign in</span>
+    <span class="muted" id="ckRelay">Relay</span>
+    <span class="muted" id="ckMac">Mac</span>
+    <span class="muted" id="ckAccess">Access</span>
+    <span class="muted" id="ckMic">Mic</span>
   </div>
 
-  <div class="trackpad" id="trackpad" data-peer="off">
-    <div class="pad-host" id="padHost" data-host="mac">MAC</div>
-    <div class="label">Trackpad</div>
-    <div class="sub">
-      Drag to move · Tap to click<br>
-      Two fingers to scroll
-    </div>
-    <div class="pad-touch" id="padTouch"></div>
-  </div>
+  <main class="app">
+    <section class="panel listen-panel" id="listenPanel">
+      <div class="deck" id="deck">
+        <div class="track" id="track"></div>
 
-  <div class="actions" id="actions">
-    <button class="action-btn delete" id="btnDelete" type="button">
-      <span class="icon">✕</span>
-      <span class="label-deck">Delete</span>
-      <span class="label-pad">L-Click</span>
-    </button>
-    <button class="action-btn submit" id="btnSubmit" type="button">
-      <span class="icon">↵</span>
-      <span class="label-deck">Submit</span>
-      <span class="label-pad">R-Click</span>
-    </button>
-  </div>
+        <div class="review" id="reviewBox">
+          <textarea
+            id="reviewText"
+            class="review-text"
+            placeholder="Nothing captured. Type here or delete."
+            autocapitalize="sentences"
+            autocomplete="off"
+            spellcheck="true"
+          ></textarea>
+          <div class="review-actions">
+            <button class="action-btn action-delete" id="btnDelete" type="button">Delete</button>
+            <button class="action-btn action-submit" id="btnSubmit" type="button">Submit</button>
+          </div>
+        </div>
+
+        <div class="sent-pill" id="sentPill">Submitted</div>
+      </div>
+    </section>
+
+    <section class="panel trackpad-panel">
+      <div class="trackpad-head">
+        <div class="trackpad-title">Trackpad</div>
+        <div class="trackpad-hint">Tap = left click<br>Two fingers = right click / scroll</div>
+      </div>
+      <div class="trackpad" id="trackpad" data-peer="off">
+        <div class="pad-host" id="padHost" data-host="mac">MAC</div>
+        <div class="trackpad-guide">
+          <strong>Trackpad</strong>
+          <span>Drag to move<br>Two-finger drag to scroll</span>
+        </div>
+        <div class="pad-touch" id="padTouch"></div>
+      </div>
+    </section>
+  </main>
 
 <script>
 (() => {
-  const deckEl     = document.getElementById('deck');
-  const trackEl    = document.getElementById('track');
-  const pagerEl    = document.getElementById('pager');
-  const presetsEl  = document.getElementById('presets');
-  const actionsEl  = document.getElementById('actions');
-  const btnDelete  = document.getElementById('btnDelete');
-  const btnSubmit  = document.getElementById('btnSubmit');
-  const dot        = document.getElementById('dot');
+  const dot = document.getElementById('dot');
   const statusText = document.getElementById('statusText');
-  const trackpadEl = document.getElementById('trackpad');
-  const padTouchEl = document.getElementById('padTouch');
-  const padHostEl  = document.getElementById('padHost');
-  const modeTabsEl = document.getElementById('modeTabs');
-  const joyChipEl  = document.getElementById('joyChip');
-  const joyRingEl  = document.getElementById('joyRing');
-  const joyNubEl   = document.getElementById('joyNub');
 
-  // ---------------- State ----------------
+  const deckEl = document.getElementById('deck');
+  const trackEl = document.getElementById('track');
+  const reviewBoxEl = document.getElementById('reviewBox');
+  const reviewTextEl = document.getElementById('reviewText');
+  const btnDeleteEl = document.getElementById('btnDelete');
+  const btnSubmitEl = document.getElementById('btnSubmit');
+  const sentPillEl = document.getElementById('sentPill');
+
+  const trackpadEl = document.getElementById('trackpad');
+  const padHostEl = document.getElementById('padHost');
+  const padTouchEl = document.getElementById('padTouch');
+
   let ws = null;
   let reconnectDelay = 500;
   let windows = [];
+  let listWindowsError = null;
+  let resyncTimer = null;
   let selected = -1;
-  let presets = [];
   let wakeLock = null;
 
-  // 'idle' | 'holding' | 'waiting' | 'ready' | 'sent'
-  let mode = 'idle';
+  let mode = 'idle'; // idle | holding | waiting | editing | error | sent
+  let transcriptText = '';
+  let errorText = '';
   let sentResetTimer = null;
+  let sentToastVisible = false;
+  let pendingTranscriptAction = 'send'; // send | edit
+  let connectionMode = 'nearby';
+  let macAccessTrusted = true;
+  let accountRelayConfig = null;
+  let supabaseClient = null;
+  let relaySessionExpiresAt = 0;
+  let sawMacState = false;
+  let macWaitTimer = null;
+  let micPermissionOk = null;
+  let accountUserSignedIn = false;
 
-  // Top-level app mode — which surface (card deck or trackpad) the
-  // user is interacting with right now.
-  let appMode = 'deck'; // 'deck' | 'pad'
+  const onboardingStrip = document.getElementById('onboardingStrip');
+  const ckSignIn = document.getElementById('ckSignIn');
+  const ckRelay = document.getElementById('ckRelay');
+  const ckMac = document.getElementById('ckMac');
+  const ckAccess = document.getElementById('ckAccess');
+  const ckMic = document.getElementById('ckMic');
 
-  // Card geometry — recomputed on resize.
   let cardWidth = 0;
-  let cardStep  = 0;  // cardWidth + 2 * margin
-  let restOffset = 0; // X that centers selected=0 in the deck
-  const CARD_MARGIN_PX = 6; // MUST match the CSS on .card
-
-  // Gesture state — null when no finger down.
+  let cardStep = 0;
+  let restOffset = 0;
+  const CARD_MARGIN_PX = 6;
   let gesture = null;
 
-  // ---------------- Wake lock ----------------
+  const HAPTIC = {
+    TAP: 6,
+    SOFT: 10,
+    MEDIUM: 18,
+    DONE: [8, 40, 14],
+    ERR: [20, 60, 20],
+  };
+
   async function requestWakeLock() {
     if (!('wakeLock' in navigator)) return;
     try {
@@ -847,118 +799,234 @@
       wakeLock.addEventListener('release', () => { wakeLock = null; });
     } catch {}
   }
+
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') requestWakeLock();
+    if (document.visibilityState === 'visible') {
+      requestWakeLock();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        send({ type: 'request_state' });
+      }
+    }
   });
   requestWakeLock();
 
-  // ---------------- Haptic feedback ----------------
-  //
-  // Web Vibration API wrapper. Patterns are in milliseconds —
-  // either a single number (one pulse) or an [on, off, on, …] array.
-  // Support matrix:
-  //   • Android Chrome / Firefox / Samsung Internet → ✓ works.
-  //   • Desktop Chrome / Edge on touch hardware     → ✓ works.
-  //   • iOS Safari (incl. Add-to-Home-Screen PWAs)  → ✗ no-op,
-  //     because Apple has never exposed the Taptic Engine to web
-  //     apps. There is no known workaround that's both reliable
-  //     and App-Store-compliant without a native wrapper.
-  //
-  // We feature-detect and silently swallow errors so an iPhone
-  // just gets a slightly less tactile but otherwise identical
-  // experience rather than any crash.
-  const HAPTIC = {
-    TAP:    6,            // generic click / button press
-    SOFT:   10,           // small state change (mode switch, edge cross)
-    MEDIUM: 18,           // "thing is now live" — hold engaged
-    DONE:   [8, 40, 14],  // success — transcription ready / submitted
-    ERR:    [20, 60, 20], // preset failed / nothing happened
-  };
   function haptic(pattern) {
     if (!('vibrate' in navigator)) return;
     try { navigator.vibrate(pattern); } catch {}
   }
 
-  // ---------------- WebSocket ----------------
-  function connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.onopen = () => {
-      reconnectDelay = 500;
-      dot.className = 'dot ok';
-      statusText.textContent = 'connected';
+  function accountConfig() {
+    const cfg = window.BLIND_MONKEY_CONFIG || {};
+    if (!cfg.accountPairing || !cfg.supabaseUrl || !cfg.supabaseAnonKey || !cfg.relayUrl) {
+      return null;
+    }
+    return cfg;
+  }
+
+  function relayHttpBase() {
+    const fromSaved = accountRelayConfig && accountRelayConfig.relay;
+    const fromAcct = (window.BLIND_MONKEY_CONFIG || {}).relayUrl;
+    const r = fromSaved || fromAcct;
+    if (!r) return null;
+    return String(r)
+      .replace(/\/+$/, '')
+      .replace(/^wss/i, 'https')
+      .replace(/^ws/i, 'http');
+  }
+
+  async function ensurePhoneRelayToken(supabaseAccessToken) {
+    const now = Date.now() / 1000;
+    if (
+      accountRelayConfig
+      && accountRelayConfig.relayToken
+      && relaySessionExpiresAt > now + 90
+    ) {
+      return accountRelayConfig.relayToken;
+    }
+    const base = relayHttpBase();
+    if (!base) return supabaseAccessToken;
+    try {
+      const r = await fetch(`${base}/v1/relay/sessions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${supabaseAccessToken}`,
+        },
+        body: JSON.stringify({ role: 'phone' }),
+      });
+      if (!r.ok) {
+        return supabaseAccessToken;
+      }
+      const data = await r.json();
+      if (data.access_token) {
+        relaySessionExpiresAt = now + (data.expires_in || 3600);
+        return data.access_token;
+      }
+    } catch {
+      // fall back to Supabase access token
+    }
+    return supabaseAccessToken;
+  }
+
+  async function prepareAccountRelayForConnect() {
+    if (!accountConfig() || !supabaseClient) return;
+    const { data } = await supabaseClient.auth.getSession();
+    const session = data && data.session;
+    if (!session || !session.access_token) return;
+    const tok = await ensurePhoneRelayToken(session.access_token);
+    const cfg = accountConfig();
+    accountRelayConfig = {
+      relay: cfg.relayUrl,
+      device: 'account',
+      relayToken: tok,
+      accessToken: session.access_token,
     };
-    ws.onclose = () => {
-      dot.className = 'dot bad';
-      statusText.textContent = 'reconnecting';
-      safeReset();
-      setTimeout(connect, reconnectDelay);
-      reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
-    };
-    ws.onerror = () => {};
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'state') {
-          const nextWindows = msg.windows || [];
-          const nextSelected = (typeof msg.selected === 'number') ? msg.selected : -1;
-          const nextPresets = msg.presets || [];
-          const nextPeer = msg.peer || null;
+  }
 
-          const windowsChanged =
-            JSON.stringify(nextWindows) !== JSON.stringify(windows);
-          const presetsChanged =
-            JSON.stringify(nextPresets) !== JSON.stringify(presets);
+  function updateOnboardingChecklist() {
+    const acct = accountConfig();
+    if (!onboardingStrip) return;
+    if (!acct) {
+      onboardingStrip.classList.remove('show');
+      return;
+    }
+    onboardingStrip.classList.add('show');
+    if (ckSignIn) {
+      const signed = accountUserSignedIn;
+      ckSignIn.className = signed ? 'ok' : 'bad';
+      ckSignIn.textContent = signed ? 'Sign in ✓' : 'Sign in';
+    }
+    if (ckRelay) {
+      const ok = connectionMode === 'remote' && ws && ws.readyState === WebSocket.OPEN;
+      ckRelay.className = ok ? 'ok' : 'bad';
+      ckRelay.textContent = ok ? 'Relay ✓' : 'Relay';
+    }
+    if (ckMac) {
+      const st = (statusText && statusText.textContent) || '';
+      const sl = st.toLowerCase();
+      const macOffline = sl.includes('mac offline');
+      const waiting = sl.includes('waiting for mac');
+      const ok = sawMacState && !macOffline;
+      ckMac.className = ok ? 'ok' : macOffline ? 'bad' : 'muted';
+      ckMac.textContent = ok ? 'Mac online ✓' : macOffline ? 'Mac offline' : waiting ? 'Mac…' : 'Mac';
+    }
+    if (ckAccess) {
+      const ok = macAccessTrusted;
+      ckAccess.className = ok ? 'ok' : 'bad';
+      ckAccess.textContent = ok ? 'Mac access ✓' : 'Mac access';
+    }
+    if (ckMic) {
+      if (micPermissionOk === true) {
+        ckMic.className = 'ok';
+        ckMic.textContent = 'Mic ✓';
+      } else if (micPermissionOk === false) {
+        ckMic.className = 'bad';
+        ckMic.textContent = 'Mic blocked';
+      } else {
+        ckMic.className = 'muted';
+        ckMic.textContent = 'Mic';
+      }
+    }
+  }
 
-          windows = nextWindows;
-          selected = nextSelected;
-          presets = nextPresets;
+  function ensureAuthOverlay() {
+    let el = document.getElementById('authOverlay');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'authOverlay';
+    el.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'z-index:1000',
+      'display:grid',
+      'place-items:center',
+      'background:rgba(0,0,0,.86)',
+      'padding:24px',
+      'font-family:-apple-system,BlinkMacSystemFont,sans-serif',
+    ].join(';');
+    el.innerHTML = `
+      <div style="width:min(420px,100%);border:1px solid rgba(255,255,255,.14);border-radius:28px;background:#101010;padding:24px;color:white;box-shadow:0 24px 80px rgba(0,0,0,.5)">
+        <div style="font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:#ff744d;font-weight:800;margin-bottom:10px">Blind Monkey</div>
+        <div style="font-size:28px;font-weight:800;line-height:1.05;margin-bottom:10px">Sign in to connect</div>
+        <div style="font-size:14px;line-height:1.45;color:#aaa;margin-bottom:18px">Use the same account on your Mac and iPhone. They will pair automatically.</div>
+        <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" style="box-sizing:border-box;width:100%;border:1px solid rgba(255,255,255,.16);border-radius:16px;background:#050505;color:white;font-size:16px;padding:14px 16px;margin-bottom:12px" />
+        <button id="authButton" style="width:100%;border:0;border-radius:16px;background:#ff744d;color:#160704;font-size:16px;font-weight:800;padding:14px 16px">Email me a sign-in link</button>
+        <div id="authMessage" style="min-height:20px;margin-top:12px;font-size:13px;color:#aaa"></div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
 
-          // Peer info drives the "data-has-peer" flag on the body,
-          // which hides host badges entirely when it's a Mac-only
-          // setup (no PC configured). Keeps the UI calm when there's
-          // no PC to talk about.
-          const hasPeer = !!(nextPeer && nextPeer.configured);
-          document.body.setAttribute('data-has-peer', hasPeer ? '1' : '0');
-          trackpadEl.setAttribute('data-peer', hasPeer ? 'on' : 'off');
+  async function initializeAccountRelay() {
+    const cfg = accountConfig();
+    if (!cfg) {
+      accountUserSignedIn = false;
+      return true;
+    }
+    if (relayConfig()) {
+      accountUserSignedIn = !!accountConfig();
+      return true;
+    }
+    if (!window.supabase || !window.supabase.createClient) {
+      statusText.textContent = 'sign-in unavailable';
+      return false;
+    }
 
-          // Cursor-host pill on the trackpad. msg.cursor_host is
-          // included in the initial state snapshot; subsequent
-          // changes come via a 'cursor_host' message.
-          if (msg.cursor_host) setCursorHost(msg.cursor_host);
+    supabaseClient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    const { data } = await supabaseClient.auth.getSession();
+    const session = data && data.session;
+    if (session && session.access_token) {
+      accountUserSignedIn = true;
+      const tok = await ensurePhoneRelayToken(session.access_token);
+      accountRelayConfig = {
+        relay: cfg.relayUrl,
+        device: 'account',
+        relayToken: tok,
+        accessToken: session.access_token,
+      };
+      updateOnboardingChecklist();
+      return true;
+    }
 
-          if (presetsChanged) renderPresets();
-          if (windowsChanged) buildCards();
-          updateActive();
-          renderPager();
-          applyModeClass();
-          // Snap the track without animation during drag; otherwise
-          // glide to the new position.
-          if (gesture && gesture.committed === 'swipe') {
-            // user is mid-swipe — don't fight them
-          } else {
-            layoutTrack();
-          }
-        } else if (msg.type === 'cursor_host') {
-          setCursorHost(msg.host);
-        } else if (msg.type === 'preset_result') {
-          flashPreset(msg.id, !!msg.ok);
-        } else if (msg.type === 'transcription_ready') {
-          // The Return keydown IS visible to our event tap, so we can
-          // still tell the user when Wispr's "press enter" voice
-          // command auto-submitted — even though the transcribed text
-          // itself isn't visible to us on Electron apps.
-          const autoSubmitted = msg.auto_submitted === true;
-          if (mode === 'waiting') {
-            setMode(autoSubmitted ? 'sent' : 'ready');
-            // Transcription arrived — success pulse. Stronger if
-            // we auto-sent ("it's done, look at your Mac") than if
-            // we're waiting for a button tap ("your turn").
-            haptic(autoSubmitted ? HAPTIC.DONE : HAPTIC.SOFT);
-          }
-        }
-      } catch {}
-    };
+    accountUserSignedIn = false;
+    dot.className = 'dot bad';
+    statusText.textContent = 'sign in';
+    const overlay = ensureAuthOverlay();
+    const email = overlay.querySelector('#authEmail');
+    const button = overlay.querySelector('#authButton');
+    const message = overlay.querySelector('#authMessage');
+    button.addEventListener('click', async () => {
+      const value = (email.value || '').trim();
+      if (!value) {
+        message.textContent = 'Enter your email first.';
+        return;
+      }
+      button.disabled = true;
+      message.textContent = 'Sending sign-in link...';
+      const { error } = await supabaseClient.auth.signInWithOtp({
+        email: value,
+        options: { emailRedirectTo: location.href },
+      });
+      button.disabled = false;
+      message.textContent = error ? error.message : 'Check your email, then come back here.';
+    });
+    supabaseClient.auth.onAuthStateChange(async (_event, nextSession) => {
+      if (nextSession && nextSession.access_token) {
+        accountUserSignedIn = true;
+        const tok = await ensurePhoneRelayToken(nextSession.access_token);
+        accountRelayConfig = {
+          relay: cfg.relayUrl,
+          device: 'account',
+          relayToken: tok,
+          accessToken: nextSession.access_token,
+        };
+        updateOnboardingChecklist();
+        overlay.remove();
+        connect();
+      }
+    });
+    return false;
   }
 
   function send(obj) {
@@ -967,88 +1035,168 @@
     }
   }
 
-  // ---------------- Mode / UI ----------------
-  function setMode(m) {
-    mode = m;
+  function sendBinary(buf) {
+    if (ws && ws.readyState === WebSocket.OPEN && buf && buf.byteLength > 0) {
+      ws.send(buf);
+    }
+  }
 
-    if (m !== 'sent' && sentResetTimer) {
-      clearTimeout(sentResetTimer);
+  function relayConfig() {
+    if (accountRelayConfig) return accountRelayConfig;
+    const params = new URLSearchParams(location.search);
+    const relay = params.get('relay');
+    const device = params.get('device');
+    const token = params.get('token');
+    if (relay && device && token) {
+      const cfg = { relay, device, token };
+      localStorage.setItem('blindRelayConfig', JSON.stringify(cfg));
+      history.replaceState(null, '', location.pathname);
+      return cfg;
+    }
+    if (params.get('clearRelay') === '1') {
+      localStorage.removeItem('blindRelayConfig');
+      history.replaceState(null, '', location.pathname);
+      return null;
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem('blindRelayConfig') || 'null');
+      if (saved && saved.relay && saved.device && saved.token) return saved;
+    } catch {}
+    return null;
+  }
+
+  function wsURL() {
+    const cfg = relayConfig();
+    if (cfg) {
+      connectionMode = 'remote';
+      const base = String(cfg.relay).replace(/\/+$/, '');
+      const device = encodeURIComponent(cfg.device);
+      const token = cfg.relayToken || cfg.accessToken || cfg.token;
+      if (token) {
+        return `${base}/relay/phone/${device}?access_token=${encodeURIComponent(token)}`;
+      }
+    }
+    connectionMode = 'nearby';
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${location.host}/ws`;
+  }
+
+  function selectedWindow() {
+    if (selected < 0 || selected >= windows.length) return null;
+    return windows[selected];
+  }
+
+  function normalizeSelection() {
+    if (!windows.length) {
+      selected = -1;
+    } else if (selected < 0 || selected >= windows.length) {
+      selected = 0;
+    }
+  }
+
+  function activeCard() {
+    return trackEl.querySelector('.card.active');
+  }
+
+  function flashSwitchCard(index = selected) {
+    if (index < 0) return;
+    const card = trackEl.querySelector(`.card:nth-child(${index + 1})`);
+    if (!card || card.classList.contains('empty')) return;
+    card.classList.remove('switch-flash');
+    // Force restart if the user flicks through cards quickly.
+    void card.offsetWidth;
+    card.classList.add('switch-flash');
+    setTimeout(() => {
+      card.classList.remove('switch-flash');
+    }, 280);
+  }
+
+  function setMode(next) {
+    mode = next;
+
+    if (next === 'idle' || next === 'editing' || next === 'error' || next === 'sent') {
+      pendingTranscriptAction = 'send';
+    }
+
+    if (next === 'idle') {
+      transcriptText = '';
+      errorText = '';
+      reviewTextEl.value = '';
+      delete reviewTextEl.dataset.touched;
+    }
+
+    renderListenPanel();
+  }
+
+  function showSubmittedToast() {
+    sentToastVisible = true;
+    renderListenPanel();
+    if (sentResetTimer) clearTimeout(sentResetTimer);
+    sentResetTimer = setTimeout(() => {
+      sentToastVisible = false;
       sentResetTimer = null;
-    }
-    if (m === 'sent') {
-      sentResetTimer = setTimeout(() => {
-        if (mode === 'sent') setMode('idle');
-      }, 3500);
-    }
-
-    const btnsActive = (m === 'ready');
-    btnDelete.classList.toggle('enabled', btnsActive);
-    btnSubmit.classList.toggle('enabled', btnsActive);
-    actionsEl.classList.toggle('waiting', m === 'waiting');
-
-    applyModeClass();
+      renderListenPanel();
+    }, 1200);
   }
 
   function safeReset() {
+    try { if (mediaRecorder) mediaRecorder.stop(); } catch {}
+    mediaRecorder = null;
+    recordedChunks = [];
+    if (gesture && gesture.holdTimer) clearTimeout(gesture.holdTimer);
+    gesture = null;
+    stopMeter();
+    releaseMicStream();
+    cancelPadGesture();
     setMode('idle');
   }
 
-  // Apply the current mode's CSS classes to the active card. Only the
-  // active card shows mode state — peeking cards stay neutral.
-  function applyModeClass() {
-    const cards = trackEl.querySelectorAll('.card');
-    cards.forEach((c) => {
-      c.classList.remove('holding', 'waiting', 'ready', 'sent');
-    });
-    const active = trackEl.querySelector('.card.active');
-    if (!active) return;
-
-    if (mode === 'holding') active.classList.add('holding');
-    else if (mode === 'waiting') active.classList.add('waiting');
-    else if (mode === 'ready')   active.classList.add('ready');
-    else if (mode === 'sent')    active.classList.add('sent');
-
-    const hint = active.querySelector('.hint');
-    if (hint) {
-      if (windows.length === 0 || selected < 0) {
-        hint.textContent = '';
-      } else if (mode === 'idle')    hint.textContent = 'Hold to talk';
-      else if (mode === 'holding')   hint.textContent = 'Listening…';
-      else if (mode === 'waiting')   hint.textContent = 'Transcribing…';
-      else if (mode === 'ready')     hint.textContent = 'Submit or Delete';
-    }
-  }
-
-  // ---------------- Cards ----------------
   function buildCards() {
     trackEl.innerHTML = '';
-    if (windows.length === 0) {
+
+    if (!windows.length) {
       const c = document.createElement('div');
       c.className = 'card empty active';
+      const title = macAccessTrusted ? 'No Cursor windows' : 'Mac access needed';
+      let line = macAccessTrusted ? 'Open Cursor' : 'Enable access on Mac';
+      if (macAccessTrusted && listWindowsError) {
+        line = listWindowsError.length > 220 ? listWindowsError.slice(0, 220) + '…' : listWindowsError;
+      }
       c.innerHTML = `
-        <div class="project">No Cursor windows</div>
-        <div class="hint">Open one to begin</div>
+        <div class="card-project"></div>
+        <div class="card-center">
+          <div class="hold-ring"></div>
+          <div class="card-status"></div>
+        </div>
       `;
+      c.querySelector('.card-project').textContent = title;
+      c.querySelector('.card-status').textContent = line;
       trackEl.appendChild(c);
       measureCards();
       return;
     }
+
     windows.forEach((w) => {
+      const host = w.host || 'mac';
       const c = document.createElement('div');
       c.className = 'card';
-      const host = w.host || 'mac';
       c.dataset.host = host;
       c.innerHTML = `
         <div class="host-badge" data-host="${host}">${host.toUpperCase()}</div>
-        <div class="project"></div>
-        <div class="pulse"></div>
-        <div class="blob"></div>
-        <div class="hint">Hold to talk</div>
-        <div class="sent-pill">✓ Sent via "press enter"</div>
+        <div class="card-project">${w.project || w.title || 'Untitled'}</div>
+        <div class="card-center">
+          <div class="hold-ring"></div>
+          <div class="card-status">Tap to talk</div>
+          <div class="transcribe-bars" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+        <button class="record-cancel" type="button" aria-label="Cancel recording">X</button>
+        <div class="meter"><div class="meter-fill"></div></div>
       `;
-      c.querySelector('.project').textContent = w.project || w.title;
       trackEl.appendChild(c);
     });
+
     measureCards();
   }
 
@@ -1062,11 +1210,9 @@
   function measureCards() {
     const deckW = deckEl.clientWidth;
     if (deckW <= 0) return;
-    // Leave ~12% for peeks on both sides (split evenly).
     cardWidth = Math.max(120, Math.round(deckW * 0.88) - 2 * CARD_MARGIN_PX);
-    cardStep  = cardWidth + 2 * CARD_MARGIN_PX;
+    cardStep = cardWidth + 2 * CARD_MARGIN_PX;
     restOffset = (deckW - cardWidth) / 2 - CARD_MARGIN_PX;
-
     trackEl.querySelectorAll('.card').forEach((c) => {
       c.style.width = cardWidth + 'px';
     });
@@ -1075,66 +1221,94 @@
 
   function layoutTrack(dragDelta = 0) {
     const n = Math.max(1, windows.length);
-    const idx = (selected >= 0) ? selected : 0;
+    const idx = selected >= 0 ? selected : 0;
     const clamped = Math.max(0, Math.min(n - 1, idx));
     const x = restOffset - clamped * cardStep + dragDelta;
     trackEl.style.transform = `translate3d(${x}px, 0, 0)`;
   }
 
-  function renderPager() {
-    pagerEl.innerHTML = '';
-    const n = windows.length;
-    // Hide via class (not inline style) so mode-based CSS can still
-    // take priority without fighting inline `display: flex`.
-    pagerEl.classList.toggle('hidden', n <= 1);
-    if (n <= 1) return;
-    for (let i = 0; i < n; i++) {
-      const d = document.createElement('div');
-      d.className = 'pager-dot' + (i === selected ? ' active' : '');
-      d.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (i === selected) return;
-        jumpTo(i);
-      });
-      pagerEl.appendChild(d);
+  function renderListenPanel() {
+    updateActive();
+
+    reviewBoxEl.classList.toggle('active', mode === 'editing' || mode === 'error');
+    reviewBoxEl.classList.toggle('error', mode === 'error');
+    sentPillEl.classList.toggle('show', sentToastVisible);
+
+    const cards = trackEl.querySelectorAll('.card');
+    cards.forEach((card) => {
+      card.classList.remove('holding', 'waiting', 'sent');
+      const status = card.querySelector('.card-status');
+      const fill = card.querySelector('.meter-fill');
+      if (status && !card.classList.contains('empty')) status.textContent = 'Tap to talk';
+      if (fill) fill.style.width = '0%';
+    });
+
+    const active = activeCard();
+    if (active && !active.classList.contains('empty')) {
+      const status = active.querySelector('.card-status');
+      if (mode === 'holding') {
+        active.classList.add('holding');
+        if (status) status.textContent = 'Tap to finish';
+      } else if (mode === 'waiting') {
+        active.classList.add('waiting');
+        if (status) status.textContent = 'Transcribing...';
+      } else if (mode === 'sent') {
+        active.classList.add('sent');
+      }
+    }
+
+    if (mode === 'editing') {
+      reviewTextEl.readOnly = false;
+      btnSubmitEl.hidden = false;
+      if (reviewTextEl.value !== transcriptText && !reviewTextEl.dataset.touched) {
+        reviewTextEl.value = transcriptText;
+      }
+      btnDeleteEl.textContent = 'Delete';
+      btnSubmitEl.disabled = !reviewTextEl.value.trim();
+      if (document.activeElement !== reviewTextEl) {
+        setTimeout(() => {
+          if (mode === 'editing') reviewTextEl.focus();
+        }, 60);
+      }
+    } else if (mode === 'error') {
+      reviewTextEl.value = errorText;
+      reviewTextEl.readOnly = true;
+      btnDeleteEl.textContent = 'Delete';
+      btnSubmitEl.hidden = true;
+      btnSubmitEl.disabled = true;
+    } else {
+      reviewTextEl.readOnly = false;
+      btnDeleteEl.textContent = 'Delete';
+      btnSubmitEl.hidden = false;
+      btnSubmitEl.disabled = true;
     }
   }
 
-  function jumpTo(i) {
-    if (i < 0 || i >= windows.length || i === selected) return;
-    // Switching card invalidates any pending confirmation.
-    if (mode === 'waiting' || mode === 'ready' || mode === 'sent') {
+  function jumpTo(index) {
+    if (!windows.length) return;
+    if (index < 0 || index >= windows.length || index === selected) return;
+    if (mode === 'holding') return;
+    if (mode === 'waiting' || mode === 'editing' || mode === 'error' || mode === 'sent') {
       setMode('idle');
     }
-    selected = i;
-    send({ type: 'select', index: i });
-    updateActive();
-    renderPager();
-    applyModeClass();
+    selected = index;
+    send({ type: 'select', index });
+    renderListenPanel();
     layoutTrack();
+    flashSwitchCard(index);
   }
 
-  // ---------------- Gesture handling ----------------
-  //
-  // A single pointer lifetime goes:
-  //   pointerdown → set up gesture, start hold-commit timer
-  //   pointermove → if moved >SWIPE_PX horizontally, commit 'swipe'
-  //                 if moved >VERTICAL_CANCEL vertically, abort
-  //                 if hold-commit timer fires before either, commit 'hold'
-  //   pointerup   → act on whichever state we committed to
-  //
-  // The short hold-commit delay lets quick horizontal flicks start a
-  // swipe without momentarily flashing "Listening…" on the card.
-  const HOLD_COMMIT_MS   = 140;
-  const SWIPE_PX         = 12;
-  const VERTICAL_CANCEL  = 36;
-  const SWIPE_DISTANCE_R = 0.30;  // fraction of card step that triggers advance
-  const SWIPE_VELOCITY   = 0.55;  // px / ms
+  const SWIPE_PX = 12;
+  const VERTICAL_CANCEL = 36;
+  const SWIPE_DISTANCE_R = 0.30;
+  const SWIPE_VELOCITY = 0.55;
 
-  function onPointerDown(e) {
-    if (gesture) return;               // ignore multi-touch
+  function onDeckPointerDown(e) {
+    if (gesture) return;
     if (e.button !== undefined && e.button !== 0) return;
+    if (!windows.length) return;
+    if (!(mode === 'idle' || mode === 'holding')) return;
+
     try { deckEl.setPointerCapture(e.pointerId); } catch {}
 
     gesture = {
@@ -1145,38 +1319,13 @@
       lastX: e.clientX,
       lastT: performance.now(),
       committed: null,
-      holdTimer: null,
+      startedWhileHolding: mode === 'holding',
     };
 
-    // When joystick is on, the deck becomes a virtual-joystick
-    // control surface. Delegate to the joy handler and skip the
-    // card-swipe/hold instrumentation entirely. onPointerMove /
-    // onPointerUp also branch on joyOn so they stay consistent.
-    if (joyOn) {
-      joyPointerDown(e);
-      return;
-    }
-
-    trackEl.classList.add('dragging');
-
-    gesture.holdTimer = setTimeout(() => {
-      if (!gesture || gesture.committed) return;
-      if (windows.length === 0 || selected < 0) return;
-      gesture.committed = 'hold';
-      startHold();
-    }, HOLD_COMMIT_MS);
   }
 
-  function onPointerMove(e) {
+  function onDeckPointerMove(e) {
     if (!gesture || e.pointerId !== gesture.pointerId) return;
-    if (joyOn) {
-      // Joystick feeds the cursor via drag offset; the tap-vs-drag
-      // decision happens in joyPointerUp (small total offset = tap).
-      joyPointerMove(e);
-      gesture.lastX = e.clientX;
-      gesture.lastT = performance.now();
-      return;
-    }
     const dx = e.clientX - gesture.startX;
     const dy = e.clientY - gesture.startY;
     gesture.lastX = e.clientX;
@@ -1184,43 +1333,38 @@
 
     if (!gesture.committed) {
       if (Math.abs(dy) > VERTICAL_CANCEL && Math.abs(dy) > Math.abs(dx)) {
-        // Vertical drag — user probably wasn't aiming at us.
-        abortGesture();
+        abortDeckGesture();
         return;
       }
       if (Math.abs(dx) > SWIPE_PX) {
+        if (gesture.startedWhileHolding) {
+          gesture.committed = 'ignore';
+          return;
+        }
         gesture.committed = 'swipe';
-        clearTimeout(gesture.holdTimer);
+        trackEl.classList.add('dragging');
       }
     }
 
     if (gesture.committed === 'swipe') {
       let delta = dx;
-      // Rubber-band at the ends so you can feel you've hit a boundary.
       const atStart = selected <= 0 && delta > 0;
-      const atEnd   = selected >= windows.length - 1 && delta < 0;
+      const atEnd = selected >= windows.length - 1 && delta < 0;
       if (atStart || atEnd) delta *= 0.35;
       layoutTrack(delta);
     }
   }
 
-  function onPointerUp(e) {
+  async function onDeckPointerUp(e) {
     if (!gesture || e.pointerId !== gesture.pointerId) return;
     const g = gesture;
     gesture = null;
-    clearTimeout(g.holdTimer);
     trackEl.classList.remove('dragging');
-
-    if (joyOn) {
-      joyPointerUp(e);
-      return;
-    }
 
     if (g.committed === 'swipe') {
       const dx = g.lastX - g.startX;
       const dt = Math.max(1, g.lastT - g.startT);
-      const velocity = dx / dt; // px per ms, negative = leftward
-
+      const velocity = dx / dt;
       let target = selected;
       const pastDistance = Math.abs(dx) > cardStep * SWIPE_DISTANCE_R;
       const pastVelocity = Math.abs(velocity) > SWIPE_VELOCITY;
@@ -1228,210 +1372,479 @@
         target = selected + (dx < 0 ? 1 : -1);
       }
       target = Math.max(0, Math.min(windows.length - 1, target));
-
       if (target !== selected) {
         jumpTo(target);
+        haptic(HAPTIC.SOFT);
       } else {
         layoutTrack();
       }
-    } else if (g.committed === 'hold') {
-      endHold();
+    } else if (g.startedWhileHolding && g.committed !== 'ignore') {
+      await endHold('send');
+    } else if (!g.startedWhileHolding && !g.committed) {
+      await startHold();
     } else {
-      // Quick tap, no hold commit, no drag — act as a "select current
-      // card" nudge. Handy if the user taps a peeking card to bring
-      // it center, but taps on the active card are a no-op.
       layoutTrack();
     }
   }
 
-  function abortGesture() {
+  async function abortDeckGesture() {
     if (!gesture) return;
-    clearTimeout(gesture.holdTimer);
-    const wasHold = gesture.committed === 'hold';
     gesture = null;
     trackEl.classList.remove('dragging');
     layoutTrack();
-    if (wasHold) endHold();
   }
 
-  deckEl.addEventListener('pointerdown', onPointerDown);
-  deckEl.addEventListener('pointermove', onPointerMove);
-  deckEl.addEventListener('pointerup', onPointerUp);
-  deckEl.addEventListener('pointercancel', onPointerUp);
+  deckEl.addEventListener('pointerdown', onDeckPointerDown);
+  deckEl.addEventListener('pointermove', onDeckPointerMove);
+  deckEl.addEventListener('pointerup', onDeckPointerUp);
+  deckEl.addEventListener('pointercancel', onDeckPointerUp);
 
-  // ---------------- Hold-to-talk ----------------
-  function startHold() {
-    if (mode === 'holding') return;
-    if (windows.length === 0) return;
-    setMode('holding');
-    send({ type: 'hold_start' });
-    // "you're being heard now" — firmer pulse than a tap.
-    haptic(HAPTIC.MEDIUM);
-  }
-  function endHold() {
+  trackEl.addEventListener('pointerdown', async (e) => {
+    const cancelBtn = e.target.closest('.record-cancel');
+    if (!cancelBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
     if (mode !== 'holding') return;
-    setMode('waiting');
-    send({ type: 'hold_end' });
-    // "got your release" — matches the feel of MacBook Force Touch
-    // click-down/click-up being two distinct haptic events.
+    await discardRecording();
+    send({ type: 'cancel' });
+    setMode('idle');
     haptic(HAPTIC.SOFT);
+  });
+
+  reviewTextEl.addEventListener('input', () => {
+    reviewTextEl.dataset.touched = '1';
+    btnSubmitEl.disabled = !reviewTextEl.value.trim();
+  });
+
+  reviewTextEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+
+  reviewTextEl.addEventListener('select', () => {
+    if (reviewTextEl.selectionStart !== reviewTextEl.selectionEnd) {
+      const pos = reviewTextEl.selectionEnd;
+      reviewTextEl.setSelectionRange(pos, pos);
+    }
+  });
+
+  btnSubmitEl.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (mode !== 'editing') return;
+    const text = reviewTextEl.value.trim();
+    if (!text) return;
+    send({ type: 'submit', text });
+    setMode('idle');
+    showSubmittedToast();
+    haptic(HAPTIC.DONE);
+  });
+
+  btnDeleteEl.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (mode === 'error') {
+      send({ type: 'cancel' });
+      setMode('idle');
+      haptic(HAPTIC.SOFT);
+      return;
+    }
+    if (mode !== 'editing') return;
+    if (reviewTextEl.value.length > 0) {
+      reviewTextEl.value = '';
+      transcriptText = '';
+      delete reviewTextEl.dataset.touched;
+      btnSubmitEl.disabled = true;
+      reviewTextEl.focus();
+      haptic(HAPTIC.SOFT);
+      return;
+    }
+    send({ type: 'cancel' });
+    setMode('idle');
+    haptic(HAPTIC.SOFT);
+  });
+
+  function clearMacWaitTimer() {
+    if (macWaitTimer) {
+      clearTimeout(macWaitTimer);
+      macWaitTimer = null;
+    }
   }
 
-  // ---------------- Submit / Delete / Click buttons ----------------
-  // Bottom buttons double as Delete/Submit in deck mode and as
-  // L-Click/R-Click in pad mode. The dispatch happens here based on
-  // the current appMode so the CSS label swap always matches what
-  // the button actually does.
-  btnSubmit.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    if (appMode === 'pad') {
-      send({ type: 'mouse_click', button: 'right' });
-      haptic(HAPTIC.TAP);
-      return;
-    }
-    if (mode !== 'ready') return;
-    send({ type: 'submit' });
-    setMode('idle');
-    haptic(HAPTIC.TAP);
-  });
-  btnDelete.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    if (appMode === 'pad') {
-      send({ type: 'mouse_click', button: 'left' });
-      haptic(HAPTIC.TAP);
-      return;
-    }
-    if (mode !== 'ready') return;
-    send({ type: 'delete' });
-    setMode('idle');
-    haptic(HAPTIC.SOFT);
-  });
+  async function connect() {
+    await prepareAccountRelayForConnect();
+    sawMacState = false;
+    clearMacWaitTimer();
+    ws = new WebSocket(wsURL());
+    ws.onopen = () => {
+      reconnectDelay = 500;
+      dot.className = connectionMode === 'remote' ? 'dot wait' : 'dot ok';
+      if (connectionMode === 'remote') {
+        statusText.textContent = 'Waiting for Mac…';
+        clearMacWaitTimer();
+        macWaitTimer = setTimeout(() => {
+          if (!sawMacState) {
+            dot.className = 'dot bad';
+            statusText.textContent = 'Mac offline';
+            haptic(HAPTIC.ERR);
+            updateOnboardingChecklist();
+          }
+        }, 6000);
+      } else {
+        statusText.textContent = 'connected nearby';
+        dot.className = 'dot ok';
+      }
+      if (connectionMode === 'remote') {
+        /* wait for first state to confirm the Mac app is on the same account & relay. */
+      }
+      updateOnboardingChecklist();
+      send({ type: 'request_state' });
+      if (resyncTimer) clearInterval(resyncTimer);
+      resyncTimer = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          send({ type: 'request_state' });
+        }
+      }, 30000);
+    };
+    ws.onclose = () => {
+      if (resyncTimer) {
+        clearInterval(resyncTimer);
+        resyncTimer = null;
+      }
+      dot.className = 'dot bad';
+      clearMacWaitTimer();
+      const remoteFail = connectionMode === 'remote';
+      statusText.textContent = remoteFail ? 'Relay disconnected' : 'reconnecting';
+      updateOnboardingChecklist();
+      safeReset();
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
+    };
+    ws.onerror = () => {};
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'state') {
+          sawMacState = true;
+          clearMacWaitTimer();
+          const windowsChanged =
+            JSON.stringify(msg.windows || []) !== JSON.stringify(windows);
+          const nextMacAccessTrusted = !msg.accessibility || msg.accessibility.trusted !== false;
+          const accessChanged = nextMacAccessTrusted !== macAccessTrusted;
+          const nextLwe = msg.list_windows_error && String(msg.list_windows_error) || null;
+          const lweChanged = nextLwe !== listWindowsError;
+          listWindowsError = nextLwe;
+          if (!nextMacAccessTrusted) {
+            statusText.textContent = 'Needs Mac access';
+            dot.className = 'dot bad';
+          } else {
+            const st = (statusText && statusText.textContent) || '';
+            if (!st.toLowerCase().includes('reconnecting')) {
+              if (connectionMode === 'remote') {
+                statusText.textContent = 'connected remotely';
+              } else {
+                statusText.textContent = 'connected nearby';
+              }
+              dot.className = 'dot ok';
+            }
+          }
+          if (connectionMode === 'remote') {
+            updateOnboardingChecklist();
+          }
+          windows = msg.windows || [];
+          macAccessTrusted = nextMacAccessTrusted;
+          selected = typeof msg.selected === 'number' ? msg.selected : -1;
+          normalizeSelection();
+          const nextPeer = msg.peer || null;
+          const hasPeer = !!(nextPeer && nextPeer.configured);
+          document.body.setAttribute('data-has-peer', hasPeer ? '1' : '0');
+          trackpadEl.setAttribute('data-peer', hasPeer ? 'on' : 'off');
+          if (msg.cursor_host) setCursorHost(msg.cursor_host);
+          if (windowsChanged || accessChanged || lweChanged || trackEl.children.length === 0) {
+            buildCards();
+          }
+          renderListenPanel();
+          updateOnboardingChecklist();
+          if (!(gesture && gesture.committed === 'swipe')) {
+            layoutTrack();
+          }
+        } else if (msg.type === 'cursor_host') {
+          setCursorHost(msg.host);
+        } else if (msg.type === 'final_transcript') {
+          if (mode === 'waiting' || mode === 'holding') {
+            transcriptText = (msg.text || '').trim();
+            if (pendingTranscriptAction === 'send') {
+              if (transcriptText) {
+                send({ type: 'submit', text: transcriptText });
+                setMode('idle');
+                showSubmittedToast();
+                haptic(HAPTIC.DONE);
+              } else {
+                setMode('idle');
+                haptic(HAPTIC.SOFT);
+              }
+            } else {
+              setMode('editing');
+              haptic(HAPTIC.SOFT);
+            }
+          }
+        } else if (msg.type === 'transcribe_error') {
+          if (mode === 'waiting' || mode === 'holding') {
+            transcriptText = '';
+            errorText = msg.message || 'Transcription failed';
+            setMode('error');
+            haptic(HAPTIC.ERR);
+          }
+        } else if (msg.type === 'action_blocked') {
+          haptic(HAPTIC.ERR);
+          if (msg.reason === 'accessibility') {
+            statusText.textContent = 'Needs Mac access';
+            dot.className = 'dot bad';
+            send({ type: 'request_state' });
+          }
+        }
+      } catch {}
+    };
+  }
 
-  // ---------------- App mode (Deck / Pad) ----------------
-  function setAppMode(next) {
-    if (next !== 'deck' && next !== 'pad') return;
-    if (next === appMode) return;
+  let micStream = null;
+  let micStreamPromise = null;
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let audioCtx = null;
+  let analyser = null;
+  let meterAnimHandle = null;
 
-    // If the user is in the middle of holding to talk, release the
-    // modifier on their behalf so we don't leave Right Option stuck
-    // down after the deck surface goes off-screen.
-    if (appMode === 'deck' && mode === 'holding') {
-      abortGesture();
+  function pickMimeType() {
+    const candidates = [
+      'audio/mp4',
+      'audio/mp4;codecs=mp4a.40.2',
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+    ];
+    if (typeof MediaRecorder === 'undefined') return '';
+    for (const c of candidates) {
+      try {
+        if (MediaRecorder.isTypeSupported(c)) return c;
+      } catch {}
     }
-    // Any pending post-dictation state gets cleared — the UI for it
-    // is tied to the deck, so it'd be invisible otherwise.
-    if (mode === 'waiting' || mode === 'ready' || mode === 'sent') {
-      setMode('idle');
+    return '';
+  }
+
+  function ensureMicStream() {
+    if (micStream) return Promise.resolve(micStream);
+    if (micStreamPromise) return micStreamPromise;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return Promise.reject(new Error('getUserMedia unavailable'));
     }
-    // Abort any in-flight trackpad gesture too.
-    cancelPadGesture();
-
-    // Joystick is a deck-only feature; disengage on switch to Pad
-    // so a dangling stick doesn't keep scrolling the Mac cursor
-    // while the user is using the trackpad below.
-    if (next === 'pad' && joyOn) {
-      disengageJoystick();
-    }
-
-    appMode = next;
-    document.body.setAttribute('data-app-mode', appMode);
-    haptic(HAPTIC.SOFT);
-
-    // Toggle the tab button states.
-    modeTabsEl.querySelectorAll('.mode-tab').forEach((tab) => {
-      tab.classList.toggle('active', tab.dataset.appMode === appMode);
+    micStreamPromise = navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    }).then((stream) => {
+      micStream = stream;
+      micStreamPromise = null;
+      return stream;
+    }).catch((err) => {
+      micStreamPromise = null;
+      throw err;
     });
+    return micStreamPromise;
+  }
 
-    // Deck re-measure (viewport width hasn't changed but the deck
-    // might have just gone visible, so its clientWidth switches from
-    // 0 to real).
-    if (appMode === 'deck') {
-      requestAnimationFrame(() => {
-        measureCards();
-        layoutTrack();
+  function releaseMicStream() {
+    if (micStream) {
+      micStream.getTracks().forEach((track) => {
+        try { track.stop(); } catch {}
       });
     }
+    micStream = null;
+    micStreamPromise = null;
+    analyser = null;
+    if (audioCtx) {
+      const ctx = audioCtx;
+      audioCtx = null;
+      try { if (ctx.state !== 'closed') ctx.close().catch(() => {}); } catch {}
+    }
   }
 
-  modeTabsEl.querySelectorAll('.mode-tab').forEach((tab) => {
-    tab.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setAppMode(tab.dataset.appMode);
+  function startMeter() {
+    if (!micStream) return;
+    if (!audioCtx) {
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch {
+        return;
+      }
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+    if (!analyser) {
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.75;
+      const src = audioCtx.createMediaStreamSource(micStream);
+      src.connect(analyser);
+    }
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    const tick = () => {
+      if (mode !== 'holding') {
+        meterAnimHandle = null;
+        const fill = activeCard() && activeCard().querySelector('.meter-fill');
+        if (fill) fill.style.width = '0%';
+        return;
+      }
+      analyser.getByteTimeDomainData(buf);
+      let peak = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = Math.abs(buf[i] - 128);
+        if (v > peak) peak = v;
+      }
+      const pct = Math.min(100, Math.max(4, (peak / 64) * 100));
+      const fill = activeCard() && activeCard().querySelector('.meter-fill');
+      if (fill) fill.style.width = pct + '%';
+      meterAnimHandle = requestAnimationFrame(tick);
+    };
+    meterAnimHandle = requestAnimationFrame(tick);
+  }
+
+  function stopMeter() {
+    if (meterAnimHandle) cancelAnimationFrame(meterAnimHandle);
+    meterAnimHandle = null;
+    trackEl.querySelectorAll('.meter-fill').forEach((fill) => {
+      fill.style.width = '0%';
     });
-  });
+  }
 
-  // ---------------- Trackpad (pad mode) ----------------
-  //
-  // Mac-trackpad-parity goals:
-  //   • Single-finger drag → cursor move, no jitter, Mac-style
-  //     non-linear acceleration (slow = precise, fast = traverses).
-  //   • One-finger tap → left click. Two-finger tap → right click.
-  //   • Two-finger drag → scroll (averaged across both pointers).
-  //   • Edge-cross to the PC when two machines are paired.
-  //
-  // Why the previous version glitched: it sent one WebSocket
-  // message per pointermove event. iOS Safari fires those up to
-  // 120 Hz on a 120 Hz screen, each with a single-sample delta, so
-  // under any network load you'd get visible stutter and the cursor
-  // would "walk" instead of "glide". It also hard-cut sub-pixel
-  // movement with `Math.abs(sx) >= 0.5`, so very slow drags dropped
-  // silently — the "sticky finger" feeling.
-  //
-  // The rewrite:
-  //   1. Use getCoalescedEvents() so we see every intermediate
-  //      sample the OS captured between dispatched pointermoves.
-  //      iOS Safari coalesces; using this is free precision.
-  //   2. Accumulate deltas per pointer per frame in padFrameDeltas.
-  //   3. One requestAnimationFrame callback emits ONE mouse_move or
-  //      ONE mouse_scroll per frame. That's 60–120 messages/second
-  //      max regardless of how fast the user swipes — which is
-  //      roughly what macOS itself feeds its cursor.
-  //   4. Sub-pixel remainder (padRemainderX/Y) lets tiny 0.3-px
-  //      deltas accumulate until they flip a whole pixel, so slow
-  //      drags work smoothly instead of being rounded to zero.
-  //   5. Acceleration curve — gentle ease on slow moves, super-
-  //      linear for fast swipes. Matches the feel of the macOS
-  //      default "tracking speed = medium" curve closely enough
-  //      that muscle memory survives the handoff.
+  async function startRecording() {
+    try {
+      await ensureMicStream();
+      micPermissionOk = true;
+      updateOnboardingChecklist();
+    } catch (err) {
+      console.warn('[mic] getUserMedia failed:', err);
+      micPermissionOk = false;
+      updateOnboardingChecklist();
+      errorText =
+        'Microphone permission denied. Allow mic access for this site and try again.';
+      setMode('error');
+      return false;
+    }
 
-  const PAD_BASE_SENSITIVITY   = 1.55; // slow-move linear scale
-  const PAD_ACCEL_THRESHOLD    = 0.8;  // px/ms below which we DO NOT accelerate
-  const PAD_ACCEL_EXPONENT     = 0.85; // curve shape; 1.0 = linear
-  const PAD_ACCEL_COEFF        = 9.0;  // how quickly accel ramps
-  const PAD_ACCEL_CAP          = 3.4;  // hard ceiling on the multiplier
+    const mime = pickMimeType();
+    recordedChunks = [];
+    try {
+      mediaRecorder = mime
+        ? new MediaRecorder(micStream, { mimeType: mime })
+        : new MediaRecorder(micStream);
+    } catch (err) {
+      console.warn('[mic] MediaRecorder init failed:', err);
+      errorText = 'This browser does not support microphone recording.';
+      releaseMicStream();
+      setMode('error');
+      return false;
+    }
 
-  // Tap timing: gesture-wide (first-down → last-up), so the budget
-  // needs to be a bit more forgiving than a single-finger press —
-  // two-finger taps have natural motor timing around 220–300 ms.
-  const PAD_TAP_MAX_MS         = 320;
-  const PAD_TAP_MAX_PX         = 8;    // per-pointer jitter tolerance
+    mediaRecorder.addEventListener('dataavailable', (ev) => {
+      if (ev.data && ev.data.size > 0) recordedChunks.push(ev.data);
+    });
 
-  const SCROLL_SENSITIVITY     = 1.6;
+    mediaRecorder.start();
+    startMeter();
+    return true;
+  }
 
-  // Active pointers:  pointerId → { startX, startY, startT,
-  //                                 lastX, lastY, lastT, moved }
+  async function finishRecording() {
+    if (!mediaRecorder) {
+      releaseMicStream();
+      return;
+    }
+    const mr = mediaRecorder;
+    mediaRecorder = null;
+    const done = new Promise((resolve) => {
+      mr.addEventListener('stop', resolve, { once: true });
+    });
+    try { mr.stop(); } catch {}
+    await done;
+    stopMeter();
+    releaseMicStream();
+
+    const mime = (mr.mimeType && mr.mimeType.split(';')[0]) || 'audio/mp4';
+    const blob = new Blob(recordedChunks, { type: mime });
+    recordedChunks = [];
+    if (blob.size === 0) return;
+
+    try {
+      const buf = await blob.arrayBuffer();
+      sendBinary(buf);
+    } catch (err) {
+      console.warn('[mic] failed to ship audio blob:', err);
+    }
+  }
+
+  async function discardRecording() {
+    if (!mediaRecorder) {
+      recordedChunks = [];
+      stopMeter();
+      releaseMicStream();
+      return;
+    }
+    const mr = mediaRecorder;
+    mediaRecorder = null;
+    const done = new Promise((resolve) => {
+      mr.addEventListener('stop', resolve, { once: true });
+    });
+    try { mr.stop(); } catch {}
+    await done;
+    recordedChunks = [];
+    stopMeter();
+    releaseMicStream();
+  }
+
+  async function startHold() {
+    if (mode !== 'idle') return;
+    if (!selectedWindow()) return;
+    pendingTranscriptAction = 'send';
+    setMode('holding');
+    send({ type: 'hold_start' });
+    const ok = await startRecording();
+    if (!ok) {
+      if (mode === 'holding') setMode('idle');
+      return;
+    }
+    haptic(HAPTIC.MEDIUM);
+  }
+
+  async function endHold(action = 'edit') {
+    if (mode !== 'holding') return;
+    pendingTranscriptAction = action === 'send' ? 'send' : 'edit';
+    setMode('waiting');
+    haptic(HAPTIC.SOFT);
+    await finishRecording();
+    send({ type: 'hold_end' });
+  }
+
+  const PAD_BASE_SENSITIVITY = 1.55;
+  const PAD_ACCEL_THRESHOLD = 0.8;
+  const PAD_ACCEL_EXPONENT = 0.85;
+  const PAD_ACCEL_COEFF = 9.0;
+  const PAD_ACCEL_CAP = 3.4;
+  const PAD_TAP_MAX_MS = 320;
+  const PAD_TAP_MAX_PX = 8;
+  const SCROLL_SENSITIVITY = 1.6;
+
   const padPointers = new Map();
-
-  // Per-pointer, per-frame pending delta. Cleared by the flush.
-  const padFrameDeltas = new Map();   // pointerId → { dx, dy }
-  let padRemainderX       = 0;        // sub-pixel carry on move
-  let padRemainderY       = 0;
-  let padScrollRemainderX = 0;        // sub-pixel carry on scroll
+  const padFrameDeltas = new Map();
+  let padRemainderX = 0;
+  let padRemainderY = 0;
+  let padScrollRemainderX = 0;
   let padScrollRemainderY = 0;
-  let padFrameScheduled   = false;
-
-  // Gesture-wide state (spans multiple pointer lifetimes). Resets
-  // when padPointers.size transitions from non-zero back to zero.
-  // We need this to distinguish 1-finger-tap (left click) from
-  // 2-finger-tap (right click) even though pointerup fires for
-  // each finger separately.
+  let padFrameScheduled = false;
   let padGestureMaxFingers = 0;
-  let padGestureAnyMoved   = false;
-  let padGestureStartT     = 0;
+  let padGestureAnyMoved = false;
+  let padGestureStartT = 0;
 
-  // Cursor-host pill (MAC / PC). Brief accent flash on crossing,
-  // plus a soft haptic pulse so the handoff feels physical.
   function setCursorHost(host) {
     if (host !== 'mac' && host !== 'pc') return;
     if (padHostEl.dataset.host === host) return;
@@ -1447,14 +1860,14 @@
   function padUpdateTouchIndicator(x, y) {
     const rect = trackpadEl.getBoundingClientRect();
     padTouchEl.style.setProperty('--touch-x', (x - rect.left) + 'px');
-    padTouchEl.style.setProperty('--touch-y', (y - rect.top)  + 'px');
+    padTouchEl.style.setProperty('--touch-y', (y - rect.top) + 'px');
   }
 
   function cancelPadGesture() {
     padPointers.clear();
     padFrameDeltas.clear();
     padGestureMaxFingers = 0;
-    padGestureAnyMoved   = false;
+    padGestureAnyMoved = false;
     padRemainderX = padRemainderY = 0;
     padScrollRemainderX = padScrollRemainderY = 0;
     padTouchEl.classList.remove('show');
@@ -1471,31 +1884,23 @@
     padFrameScheduled = false;
     if (padFrameDeltas.size === 0) return;
 
-    // How many fingers moved this frame determines whether this
-    // is a move or a scroll. We trust padPointers (live) over
-    // padFrameDeltas (may include a pointer that just lifted).
     const activeCount = padPointers.size;
-    const movingIds   = [...padFrameDeltas.keys()];
+    const movingIds = [...padFrameDeltas.keys()];
 
     if (activeCount <= 1 && movingIds.length >= 1) {
-      // Single-finger drag → cursor move. If multiple pointerids
-      // somehow queued (e.g. a quick second finger tap during a
-      // drag), sum their deltas — it'll still look like the user's
-      // intent.
       let dx = 0, dy = 0;
       for (const id of movingIds) {
         const d = padFrameDeltas.get(id);
-        dx += d.dx; dy += d.dy;
+        dx += d.dx;
+        dy += d.dy;
       }
       emitPadMove(dx, dy);
     } else if (activeCount >= 2) {
-      // Two-finger scroll — average deltas across whichever pointers
-      // moved this frame. Summing would make scrolling 2× too fast
-      // since the fingers should be moving roughly together.
       let dx = 0, dy = 0;
       for (const id of movingIds) {
         const d = padFrameDeltas.get(id);
-        dx += d.dx; dy += d.dy;
+        dx += d.dx;
+        dy += d.dy;
       }
       dx /= movingIds.length;
       dy /= movingIds.length;
@@ -1505,28 +1910,19 @@
     padFrameDeltas.clear();
   }
 
-  // Trackpad-style acceleration: magnitude-aware multiplier.
-  // Below PAD_ACCEL_THRESHOLD (≈ a slow pen-on-paper drag) we use
-  // a flat 1.0× so precision doesn't fight the user. Above it we
-  // ramp into a power curve, capped so flick-swipes don't teleport
-  // off the screen.
   function padAccelFactor(magPxPerFrame) {
-    // magPxPerFrame is effectively the speed at ~60 Hz. Convert to
-    // px/ms so the threshold isn't tied to frame rate.
     const speed = magPxPerFrame / (1000 / 60);
     if (speed <= PAD_ACCEL_THRESHOLD) return 1.0;
-    const over  = speed - PAD_ACCEL_THRESHOLD;
+    const over = speed - PAD_ACCEL_THRESHOLD;
     const boost = Math.pow(over * PAD_ACCEL_COEFF, PAD_ACCEL_EXPONENT);
     return Math.min(PAD_ACCEL_CAP, 1.0 + boost * 0.12);
   }
 
   function emitPadMove(rawDx, rawDy) {
-    const mag   = Math.hypot(rawDx, rawDy);
+    const mag = Math.hypot(rawDx, rawDy);
     const accel = padAccelFactor(mag);
     const sx = rawDx * PAD_BASE_SENSITIVITY * accel + padRemainderX;
     const sy = rawDy * PAD_BASE_SENSITIVITY * accel + padRemainderY;
-    // Math.trunc (vs round) keeps the sign consistent for the
-    // remainder — important so slow drags don't jitter around 0.
     const ix = Math.trunc(sx);
     const iy = Math.trunc(sy);
     padRemainderX = sx - ix;
@@ -1541,7 +1937,6 @@
     const iy = Math.trunc(sy);
     padScrollRemainderX = sx - ix;
     padScrollRemainderY = sy - iy;
-    // macOS natural scroll convention: fingers down → content down.
     if (ix !== 0 || iy !== 0) send({ type: 'mouse_scroll', dx: ix, dy: iy });
   }
 
@@ -1551,12 +1946,9 @@
 
     const now = performance.now();
     if (padPointers.size === 0) {
-      // Fresh gesture — reset all gesture-wide accumulators. Keeping
-      // the per-gesture remainders fresh avoids "phantom drift" on
-      // the first few pixels of a new drag.
       padGestureMaxFingers = 1;
-      padGestureAnyMoved   = false;
-      padGestureStartT     = now;
+      padGestureAnyMoved = false;
+      padGestureStartT = now;
       padRemainderX = padRemainderY = 0;
       padScrollRemainderX = padScrollRemainderY = 0;
     } else {
@@ -1565,8 +1957,8 @@
 
     padPointers.set(e.pointerId, {
       startX: e.clientX, startY: e.clientY, startT: now,
-      lastX:  e.clientX, lastY:  e.clientY, lastT:  now,
-      moved:  false,
+      lastX: e.clientX, lastY: e.clientY, lastT: now,
+      moved: false,
     });
 
     if (padPointers.size === 1) {
@@ -1582,37 +1974,34 @@
     const p = padPointers.get(e.pointerId);
     if (!p) return;
 
-    // iOS Safari coalesces pointer events on high-refresh screens;
-    // asking for the coalesced list gives us the intermediate
-    // samples the OS saw. Falling back to [e] for browsers that
-    // don't implement it (most desktops) is equivalent to the old
-    // behavior.
     const coalesced =
-      (typeof e.getCoalescedEvents === 'function')
+      typeof e.getCoalescedEvents === 'function'
         ? e.getCoalescedEvents()
         : [];
     const samples = coalesced.length ? coalesced : [e];
 
-    let dxTotal = 0, dyTotal = 0;
+    let dxTotal = 0;
+    let dyTotal = 0;
     for (const s of samples) {
       dxTotal += s.clientX - p.lastX;
       dyTotal += s.clientY - p.lastY;
-      p.lastX  = s.clientX;
-      p.lastY  = s.clientY;
+      p.lastX = s.clientX;
+      p.lastY = s.clientY;
     }
     p.lastT = performance.now();
 
-    // Per-pointer and gesture-wide "did they actually drag?" checks.
     const totalDx = e.clientX - p.startX;
     const totalDy = e.clientY - p.startY;
-    if (Math.abs(totalDx) > PAD_TAP_MAX_PX ||
-        Math.abs(totalDy) > PAD_TAP_MAX_PX) {
+    if (Math.abs(totalDx) > PAD_TAP_MAX_PX || Math.abs(totalDy) > PAD_TAP_MAX_PX) {
       p.moved = true;
       padGestureAnyMoved = true;
     }
 
     let acc = padFrameDeltas.get(e.pointerId);
-    if (!acc) { acc = { dx: 0, dy: 0 }; padFrameDeltas.set(e.pointerId, acc); }
+    if (!acc) {
+      acc = { dx: 0, dy: 0 };
+      padFrameDeltas.set(e.pointerId, acc);
+    }
     acc.dx += dxTotal;
     acc.dy += dyTotal;
     schedulePadFrame();
@@ -1627,19 +2016,13 @@
     if (!p) return;
     padPointers.delete(e.pointerId);
 
-    // Flush any pending frame synchronously so the last few pixels
-    // of a flick-drag don't get swallowed when the finger leaves.
     if (padFrameScheduled || padFrameDeltas.size) {
       flushPadFrame();
     }
 
-    // When the LAST pointer lifts, the gesture is complete —
-    // that's the moment we can classify it as a tap vs a drag and
-    // fire the click if appropriate.
     if (padPointers.size === 0) {
       const gestureDur = performance.now() - padGestureStartT;
-      const wasTap     = !padGestureAnyMoved &&
-                         gestureDur < PAD_TAP_MAX_MS;
+      const wasTap = !padGestureAnyMoved && gestureDur < PAD_TAP_MAX_MS;
 
       if (wasTap) {
         if (padGestureMaxFingers >= 2) {
@@ -1650,9 +2033,8 @@
         haptic(HAPTIC.TAP);
       }
 
-      // Reset gesture state for the next gesture.
       padGestureMaxFingers = 0;
-      padGestureAnyMoved   = false;
+      padGestureAnyMoved = false;
       padFrameDeltas.clear();
       padTouchEl.classList.remove('show');
       trackpadEl.classList.remove('active');
@@ -1662,265 +2044,21 @@
   trackpadEl.addEventListener('pointerup', padOnPointerUp);
   trackpadEl.addEventListener('pointercancel', padOnPointerUp);
 
-  // ---------------- Presets ----------------
-  function renderPresets() {
-    presetsEl.innerHTML = '';
-    if (!presets.length) {
-      presetsEl.classList.add('hidden');
-      return;
-    }
-    presetsEl.classList.remove('hidden');
-    presets.forEach((p) => {
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.className = 'preset';
-      el.dataset.presetId = p.id;
-      el.textContent = p.label;
-      el.title = `${p.label} (${p.submit})`;
-      el.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        firePreset(p);
-        haptic(HAPTIC.TAP);
-      });
-      presetsEl.appendChild(el);
-    });
-  }
-
-  function firePreset(p) {
-    if (mode === 'holding') return;
-    if (mode === 'waiting' || mode === 'ready' || mode === 'sent') {
-      setMode('idle');
-    }
-    if (!windows.length) return;
-
-    const el = presetsEl.querySelector(`.preset[data-preset-id="${cssEscape(p.id)}"]`);
-    if (el) {
-      el.classList.remove('flash-ok', 'flash-err');
-      el.classList.add('firing');
-    }
-    send({ type: 'preset', id: p.id });
-  }
-
-  function flashPreset(id, ok) {
-    const el = presetsEl.querySelector(`.preset[data-preset-id="${cssEscape(id)}"]`);
-    if (!el) return;
-    el.classList.remove('firing');
-    el.classList.add(ok ? 'flash-ok' : 'flash-err');
-    // Confirm server actually fired it. ERR pattern tells the user
-    // to look at their Mac — the preset either had no text field to
-    // paste into, or Cursor wasn't focusable.
-    haptic(ok ? HAPTIC.DONE : HAPTIC.ERR);
-    setTimeout(() => {
-      el.classList.remove('flash-ok', 'flash-err');
-    }, 900);
-  }
-
-  function cssEscape(s) {
-    if (window.CSS && CSS.escape) return CSS.escape(s);
-    return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
-  }
-
-  // ---------------- Joystick mode ----------------
-  //
-  // When the Stick chip is toggled on, the deck becomes a virtual
-  // joystick surface. Touch anywhere to drop the stick origin at
-  // that point; drag to drive the Mac cursor (rate-controlled: how
-  // far you drag = how fast the cursor moves, direction = drag
-  // direction). Release to stop. A tap with no drag = left click.
-  //
-  // Why on-deck origin (instead of a fixed joystick position)?
-  // Keeps the thumb anywhere you naturally rest it. Feels like a
-  // mobile-FPS left-stick — drop, drag, release.
-
-  let joyOn = false;
-  let joyActive = null;        // active pointer state while dragging
-  let joyRAF = 0;
-  let joyLastTickTs = 0;
-
-  // Dead zone (no motion) and max-throw radius, in CSS pixels.
-  // Beyond JOY_MAX_PX the nub stops moving but the velocity stays
-  // pinned at the max speed, so flicking to the edge = full speed.
-  const JOY_DEAD_PX  = 18;
-  const JOY_MAX_PX   = 90;
-  // Top cursor speed in Mac pixels per second. 1400 feels peppy on
-  // a 1470px primary display — crossable in a bit under a second
-  // edge-to-edge. Tune to taste.
-  const JOY_MAX_SPEED = 1400;
-  // Below this total drag offset at pointerup, treat it as a click.
-  const JOY_TAP_PX = 6;
-  // Milliseconds of contact that also still qualifies as a tap.
-  const JOY_TAP_MS = 260;
-
-  function updateJoyChip() {
-    joyChipEl.classList.toggle('on', joyOn);
-    joyChipEl.setAttribute('aria-pressed', joyOn ? 'true' : 'false');
-    document.body.classList.toggle('joy-on', joyOn);
-  }
-
-  function engageJoystick() {
-    joyOn = true;
-    updateJoyChip();
-    haptic(HAPTIC.MEDIUM);
-  }
-
-  function disengageJoystick() {
-    joyOn = false;
-    joyActive = null;
-    cancelAnimationFrame(joyRAF);
-    joyRAF = 0;
-    hideJoyVisuals();
-    updateJoyChip();
-    haptic(HAPTIC.SOFT);
-  }
-
-  joyChipEl.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (joyOn) disengageJoystick();
-    else engageJoystick();
-  });
-
-  // ----- Visual helpers (ring + nub) -----
-
-  function showJoyVisuals(originX, originY, nubX, nubY) {
-    joyRingEl.style.left = originX + 'px';
-    joyRingEl.style.top  = originY + 'px';
-    joyNubEl.style.left  = nubX + 'px';
-    joyNubEl.style.top   = nubY + 'px';
-    joyRingEl.classList.add('show');
-    joyNubEl.classList.add('show');
-  }
-  function updateJoyNub(nubX, nubY) {
-    joyNubEl.style.left = nubX + 'px';
-    joyNubEl.style.top  = nubY + 'px';
-  }
-  function hideJoyVisuals() {
-    joyRingEl.classList.remove('show');
-    joyNubEl.classList.remove('show');
-  }
-
-  // ----- Pointer handlers (called from the shared onPointerDown/…) -----
-
-  function joyPointerDown(e) {
-    // Coordinates relative to the deck element — the ring/nub are
-    // absolute-positioned inside #deck, so we use offsetX/Y-style
-    // local coords (computed from clientX minus the deck rect).
-    const rect = deckEl.getBoundingClientRect();
-    const lx = e.clientX - rect.left;
-    const ly = e.clientY - rect.top;
-
-    joyActive = {
-      pointerId: e.pointerId,
-      originX: lx,
-      originY: ly,
-      lastX: lx,
-      lastY: ly,
-      startT: performance.now(),
-      movedMax: 0,
-    };
-    showJoyVisuals(lx, ly, lx, ly);
-
-    // Kick the RAF loop. It stays armed until pointerup (so the
-    // cursor keeps moving even if the user holds the stick still
-    // at full throw without generating pointermoves).
-    joyLastTickTs = performance.now();
-    cancelAnimationFrame(joyRAF);
-    joyRAF = requestAnimationFrame(joyTick);
-  }
-
-  function joyPointerMove(e) {
-    if (!joyActive || e.pointerId !== joyActive.pointerId) return;
-    const rect = deckEl.getBoundingClientRect();
-    joyActive.lastX = e.clientX - rect.left;
-    joyActive.lastY = e.clientY - rect.top;
-
-    // Track the peak drag distance so pointerup can tell "tap"
-    // from "tiny drag".
-    const dx = joyActive.lastX - joyActive.originX;
-    const dy = joyActive.lastY - joyActive.originY;
-    const d = Math.hypot(dx, dy);
-    if (d > joyActive.movedMax) joyActive.movedMax = d;
-
-    // Clamp the nub to the max-throw circle so it visually pins
-    // to the edge when you drag past JOY_MAX_PX.
-    const clamped = Math.min(d, JOY_MAX_PX);
-    const nx = joyActive.originX + (d > 0 ? (dx / d) * clamped : 0);
-    const ny = joyActive.originY + (d > 0 ? (dy / d) * clamped : 0);
-    updateJoyNub(nx, ny);
-  }
-
-  function joyPointerUp(e) {
-    if (!joyActive || e.pointerId !== joyActive.pointerId) return;
-    const heldMs = performance.now() - joyActive.startT;
-    const wasTap = joyActive.movedMax < JOY_TAP_PX && heldMs < JOY_TAP_MS;
-    joyActive = null;
-    cancelAnimationFrame(joyRAF);
-    joyRAF = 0;
-    hideJoyVisuals();
-    if (wasTap) {
-      send({ type: 'mouse_click', button: 'left' });
-      haptic(HAPTIC.TAP);
-    }
-  }
-
-  // ----- RAF loop: translate stick offset → per-frame mouse_move -----
-
-  function joyTick(ts) {
-    if (!joyActive) return;
-    joyRAF = requestAnimationFrame(joyTick);
-
-    const dtMs = Math.max(1, ts - joyLastTickTs);
-    joyLastTickTs = ts;
-
-    const dx = joyActive.lastX - joyActive.originX;
-    const dy = joyActive.lastY - joyActive.originY;
-    const dist = Math.hypot(dx, dy);
-    if (dist < JOY_DEAD_PX) return;
-
-    // Magnitude: 0 at dead-zone edge, 1 at max throw, clamped.
-    const mag = Math.min(1, (dist - JOY_DEAD_PX) / (JOY_MAX_PX - JOY_DEAD_PX));
-    // Ease-in curve (squared) so small offsets feel gentle and full
-    // throw still gives you top speed. Gives the stick a mechanical
-    // feel instead of a linear "always too fast or too slow" one.
-    const eased = mag * mag;
-
-    const speed = JOY_MAX_SPEED * eased;       // px / s
-    const ux = dx / dist, uy = dy / dist;       // unit direction
-    const vx = ux * speed;
-    const vy = uy * speed;
-
-    // Per-frame pixel delta. Sub-pixel deltas get dropped by the
-    // Mac event pipeline, but we still send them so accumulated
-    // micro-motion eventually registers.
-    const fdx = vx * dtMs / 1000;
-    const fdy = vy * dtMs / 1000;
-    send({ type: 'mouse_move', dx: fdx, dy: fdy });
-  }
-
-  // ---------------- Global gesture hardening ----------------
-  // iOS Safari still fires these even with touch-action set, so squash
-  // them defensively.
-  document.addEventListener('gesturestart',  (e) => e.preventDefault());
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('gesturechange', (e) => e.preventDefault());
-  document.addEventListener('dblclick',      (e) => e.preventDefault());
-  document.addEventListener('contextmenu',   (e) => e.preventDefault());
+  document.addEventListener('dblclick', (e) => e.preventDefault());
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
 
   window.addEventListener('resize', measureCards);
   window.addEventListener('orientationchange', () => {
-    // Wait one frame for the layout to settle before re-measuring.
     requestAnimationFrame(() => requestAnimationFrame(measureCards));
   });
 
-  // Initial paint — start in deck mode with an empty card until the
-  // first state arrives over the WebSocket.
-  document.body.setAttribute('data-app-mode', appMode);
-  setMode('idle');
   buildCards();
-  renderPager();
-  renderPresets();
-  updateJoyChip();
-  connect();
+  renderListenPanel();
+  initializeAccountRelay().then((ready) => {
+    if (ready) connect();
+  });
 })();
 </script>
 </body>

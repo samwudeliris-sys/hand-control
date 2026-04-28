@@ -1,11 +1,10 @@
 #!/bin/bash
 #
-# Build a double-clickable Mac app bundle for Hand Control.
+# Build a double-clickable Mac app bundle for Blind Monkey.
 #
-# The app is a thin wrapper: its executable opens Terminal.app via
-# osascript and runs ``./run.sh`` from this repo. That keeps the
-# banner/QR code visible (helpful on first launch) and means "close
-# Terminal" = "stop the server" — the metaphor Mac users expect.
+# The app is a small native Cocoa host that runs ``./run.sh`` from
+# this repo in the background, captures logs, and exposes basic
+# start/stop/link actions without opening Terminal.app.
 #
 # The bundle is installed to ``~/Applications/`` (no sudo needed)
 # and registered with Launch Services so Spotlight picks it up
@@ -20,7 +19,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_DIR="$(pwd)"
-APP_NAME="Hand Control"
+APP_NAME="Blind Monkey"
 INSTALL_PARENT="${1:-$HOME/Applications}"
 APP_DIR="$INSTALL_PARENT/$APP_NAME.app"
 
@@ -32,6 +31,12 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
+if ! command -v swiftc >/dev/null 2>&1; then
+  echo "swiftc not found. Install Xcode Command Line Tools first:" >&2
+  echo "  xcode-select --install" >&2
+  exit 1
+fi
+
 # --- Info.plist ---------------------------------------------------------
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
@@ -39,9 +44,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key>               <string>Hand Control</string>
-  <key>CFBundleDisplayName</key>        <string>Hand Control</string>
-  <key>CFBundleIdentifier</key>         <string>com.handcontrol.launcher</string>
+  <key>CFBundleName</key>               <string>Blind Monkey</string>
+  <key>CFBundleDisplayName</key>        <string>Blind Monkey</string>
+  <key>CFBundleIdentifier</key>         <string>com.blindmonkey.launcher</string>
   <key>CFBundleVersion</key>            <string>1.0</string>
   <key>CFBundleShortVersionString</key> <string>1.0</string>
   <key>CFBundlePackageType</key>        <string>APPL</string>
@@ -50,49 +55,26 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>LSApplicationCategoryType</key>  <string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key>    <true/>
   <key>LSMinimumSystemVersion</key>     <string>11.0</string>
+  <key>BMRepoDir</key>                  <string>__BM_REPO_DIR__</string>
 </dict>
 </plist>
 PLIST
+python3 - "$APP_DIR/Contents/Info.plist" "$REPO_DIR" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+repo = sys.argv[2]
+path.write_text(path.read_text().replace("__BM_REPO_DIR__", repo))
+PY
 
-# --- Launcher script (Contents/MacOS/launcher) --------------------------
-#
-# Two behaviors:
-#   • Port 8000 free:  open a new Terminal tab running ``./run.sh``
-#   • Port in use:     assume Hand Control is already running and just
-#                      bring Terminal to the foreground, so the user
-#                      sees the logs / QR instead of a crash-on-reboot.
-#
-# We bake REPO_DIR in at build time. If the user moves the repo,
-# they should rerun this script to rebuild the app.
-#
-# Outer heredoc is UNquoted so $REPO_DIR is substituted once at
-# build time. Shell-variable references that should survive until
-# run time (like $PATH) are backslash-escaped.
+# --- Native launcher executable ---------------------------------------
 
-cat > "$APP_DIR/Contents/MacOS/launcher" <<LAUNCHER
-#!/bin/bash
-REPO_DIR='$REPO_DIR'
-export PATH="/usr/local/bin:/opt/homebrew/bin:\$PATH"
-
-if lsof -ti :8000 >/dev/null 2>&1; then
-  # Already running — just surface Terminal.
-  osascript -e 'tell application "Terminal" to activate' || true
-  exit 0
-fi
-
-# Fresh launch: open a new Terminal window running run.sh inside the
-# repo. Single-quoted path inside the AppleScript do-script handles
-# the space in "Hand control".
-osascript <<OSA
-tell application "Terminal"
-  activate
-  do script "cd '\$REPO_DIR' && ./run.sh"
-end tell
-OSA
-LAUNCHER
-
+swiftc \
+  "$REPO_DIR/mac-companion/BlindMonkeyCompanion.swift" \
+  -framework Cocoa \
+  -o "$APP_DIR/Contents/MacOS/launcher"
 chmod +x "$APP_DIR/Contents/MacOS/launcher"
-echo "  ✓ launcher installed"
+echo "  ✓ native launcher compiled"
 
 # --- App icon -----------------------------------------------------------
 #
@@ -144,8 +126,8 @@ cat <<NEXT
 Built: $APP_DIR
 
 To launch:
-  • Open Launchpad and click "Hand Control", or
-  • Cmd+Space and type "Hand Control", or
+  • Open Launchpad and click "Blind Monkey", or
+  • Cmd+Space and type "Blind Monkey", or
   • Drag the app into your Dock for one-click access.
 
 NEXT

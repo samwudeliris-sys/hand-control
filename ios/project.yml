@@ -1,0 +1,15 @@
+name: BlindMonkey
+options:
+  bundleIdPrefix: com.blindmonkey
+targets:
+  BlindMonkey:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - BlindMonkey
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.blindmonkey.ios
+      INFOPLIST_KEY_CFBundleDisplayName: Blind Monkey
+      INFOPLIST_KEY_NSMicrophoneUsageDescription: Blind Monkey uses the microphone only when you tap record to dictate to your Mac.
+      INFOPLIST_KEY_NSFaceIDUsageDescription: Blind Monkey can use Face ID to unlock your saved account session.

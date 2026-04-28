@@ -1,0 +1,35 @@
+name: Bug report
+description: Something broke or behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report an issue. Include versions and steps so we can reproduce.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: What did you expect vs what occurred?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. …\n2. …"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. 15.4
+  - type: input
+    id: cursor
+    attributes:
+      label: Cursor version (optional)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots (optional)
+      description: Redact API keys and hostnames if posting publicly.

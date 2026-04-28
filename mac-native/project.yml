@@ -1,0 +1,15 @@
+name: BlindMonkeyMac
+options:
+  bundleIdPrefix: com.blindmonkey
+targets:
+  BlindMonkeyMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - .
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.blindmonkey.mac
+      INFOPLIST_KEY_CFBundleDisplayName: Blind Monkey
+      INFOPLIST_KEY_NSAppleEventsUsageDescription: Blind Monkey uses Apple Events to inspect and switch Cursor windows you choose to control.
+      CODE_SIGN_ENTITLEMENTS: BlindMonkeyMac.entitlements

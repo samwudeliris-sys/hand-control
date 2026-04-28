@@ -5,8 +5,21 @@ cd "$(dirname "$0")"
 
 # --- Platform check ---------------------------------------------------------
 if [[ "$(uname)" != "Darwin" ]]; then
-  echo "Hand Control only runs on macOS. Detected: $(uname)" >&2
+  echo "Blind Monkey only runs on macOS. Detected: $(uname)" >&2
   exit 1
+fi
+
+# --- Environment file ------------------------------------------------------
+# Load user-level secrets (e.g. OPENAI_API_KEY) without forcing the user
+# to re-export on every shell. install.sh writes this file; it's
+# gitignored via ~/ so it never ends up in the repo. Existing exports
+# in the shell take precedence — we only fill in missing vars.
+ENV_FILE="$HOME/.hand-control.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
 fi
 
 # --- Python check -----------------------------------------------------------

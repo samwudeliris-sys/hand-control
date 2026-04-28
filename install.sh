@@ -13,7 +13,7 @@
 #   1. Checks macOS + Python 3.10+ (offers to brew-install Python if
 #      missing and Homebrew is available).
 #   2. Creates .venv/ and installs Python dependencies.
-#   3. Builds a double-clickable Hand Control.app in ~/Applications/.
+#   3. Builds a double-clickable Blind Monkey.app in ~/Applications/.
 #   4. Pre-generates the self-signed HTTPS cert so the cert-trust
 #      install flow works on the very first phone visit.
 #   5. Checks that Wispr Flow is installed; links out if not.
@@ -161,76 +161,112 @@ fi
 
 # --- 5. App bundle + one-click launch shortcuts ---------------------------
 
-step "5/6  Hand Control.app  +  launch shortcuts"
+step "5/6  Blind Monkey.app  +  launch shortcuts"
 
 chmod +x scripts/build-app.sh
 ./scripts/build-app.sh
 
-APP_PATH="$HOME/Applications/Hand Control.app"
+APP_PATH="$HOME/Applications/Blind Monkey.app"
 
 # 5a. Desktop alias so double-clicking from the desktop just works.
 if [ -d "$APP_PATH" ]; then
   osascript >/dev/null 2>&1 <<OSA || true
 tell application "Finder"
-    if exists (alias file "Hand Control" of desktop) then
-        delete (alias file "Hand Control" of desktop)
+    if exists (alias file "Blind Monkey" of desktop) then
+        delete (alias file "Blind Monkey" of desktop)
     end if
     make new alias file at desktop to (POSIX file "$APP_PATH")
-    set name of result to "Hand Control"
+    set name of result to "Blind Monkey"
 end tell
 OSA
-  if [ -e "$HOME/Desktop/Hand Control" ]; then
-    ok "Desktop shortcut: ~/Desktop/Hand Control"
+  if [ -e "$HOME/Desktop/Blind Monkey" ]; then
+    ok "Desktop shortcut: ~/Desktop/Blind Monkey"
   fi
 
   # 5b. Pin to the Dock (no-op if already there).
   #
   # defaults serializes the app path URL-encoded ("Hand%20Control.app")
-  # and the bundle-identifier uncoded ("com.handcontrol.launcher"), so
+  # and the bundle-identifier uncoded ("com.blindmonkey.launcher"), so
   # we match on the bundle ID — the one thing that's both unique and
   # immune to path formatting quirks.
   if defaults read com.apple.dock persistent-apps 2>/dev/null \
-       | grep -q 'com.handcontrol.launcher'; then
+       | grep -q 'com.blindmonkey.launcher'; then
     ok "Dock:  already pinned"
   else
     ENCODED_PATH="${APP_PATH// /%20}"
     DOCK_ENTRY="<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>file://${ENCODED_PATH}/</string><key>_CFURLStringType</key><integer>15</integer></dict></dict></dict>"
     if defaults write com.apple.dock persistent-apps -array-add "$DOCK_ENTRY" 2>/dev/null; then
       killall Dock 2>/dev/null || true
-      ok "Dock:  pinned Hand Control"
+      ok "Dock:  pinned Blind Monkey"
     else
       warn "couldn't add to Dock automatically (not fatal — drag the icon from ~/Applications)."
     fi
   fi
 fi
 
-# --- 6. Final setup: Wispr Flow + macOS permissions ------------------------
+# --- 6. OpenAI API key + permissions ---------------------------------------
 
-step "6/6  Wispr Flow + macOS permissions"
+step "6/6  OpenAI API key + macOS permissions"
 
-# Wispr Flow detection. It's a paid product, so we can't install it
-# for you — just nudge and link.
-WISPR_INSTALLED=0
-if [ -d "/Applications/Wispr Flow.app" ] || [ -d "$HOME/Applications/Wispr Flow.app" ]; then
-  WISPR_INSTALLED=1
-  ok "Wispr Flow detected"
+# Hand Control transcribes the phone's microphone via OpenAI Whisper.
+# We persist the key to ~/.hand-control.env (gitignored) and source it
+# from run.sh so the user doesn't need to re-export on every shell.
+ENV_FILE="$HOME/.hand-control.env"
+touch "$ENV_FILE"
+chmod 600 "$ENV_FILE" 2>/dev/null || true
+
+EXISTING_KEY=""
+if grep -q '^OPENAI_API_KEY=' "$ENV_FILE" 2>/dev/null; then
+  EXISTING_KEY="$(grep '^OPENAI_API_KEY=' "$ENV_FILE" | tail -n1 | cut -d= -f2-)"
+fi
+# Treat an env-var set in the user's shell as "already configured" too.
+if [ -z "$EXISTING_KEY" ] && [ -n "${OPENAI_API_KEY:-}" ]; then
+  EXISTING_KEY="$OPENAI_API_KEY"
+fi
+
+if [ -n "$EXISTING_KEY" ]; then
+  MASK="${EXISTING_KEY:0:6}…${EXISTING_KEY: -4}"
+  ok "OpenAI API key present ($MASK)"
 else
-  warn "Wispr Flow not found in /Applications."
-  say  "Hand Control uses Wispr Flow to do the actual voice-to-text:"
-  say  "  • Download:  https://wisprflow.ai"
-  say  "  • In Wispr settings, set the dictation hotkey to  Right Option."
-  if ask_yn "Open the Wispr Flow site now?" n; then
-    open "https://wisprflow.ai" || true
+  warn "No OPENAI_API_KEY set."
+  say  "The phone's microphone is transcribed with OpenAI Whisper, so"
+  say  "Hand Control needs a key. You can skip this for now and add"
+  say  "one later (edit $ENV_FILE or export it in your shell)."
+  say  "  • Get a key at:  https://platform.openai.com/api-keys"
+  if [ -t 0 ] && ask_yn "Paste your OPENAI_API_KEY now?" n; then
+    # -s would hide the echo, but that's confusing when a key has
+    # punctuation — we show it. Terminal scrollback is already a
+    # local-only trust boundary.
+    read -r -p "  Key: " USER_KEY
+    USER_KEY="${USER_KEY## }"
+    USER_KEY="${USER_KEY%% }"
+    if [ -n "$USER_KEY" ]; then
+      # Replace any existing line and append a fresh one.
+      if grep -q '^OPENAI_API_KEY=' "$ENV_FILE"; then
+        # macOS sed: -i '' in-place
+        sed -i '' '/^OPENAI_API_KEY=/d' "$ENV_FILE"
+      fi
+      printf 'OPENAI_API_KEY=%s\n' "$USER_KEY" >> "$ENV_FILE"
+      ok "Saved to $ENV_FILE"
+    else
+      warn "empty input — skipped."
+    fi
   fi
+fi
+
+# Wispr Flow detection (optional — only needed if you want to dictate
+# from the Mac itself with no phone in hand).
+if [ -d "/Applications/Wispr Flow.app" ] || [ -d "$HOME/Applications/Wispr Flow.app" ]; then
+  ok "Wispr Flow detected (optional; used when you dictate from the Mac without the phone)"
 fi
 
 # Accessibility permission pane.
 say  ""
 say  "Opening System Settings → Privacy → Accessibility."
-say  "Check the box next to your terminal app (Terminal / iTerm /"
-say  "whatever you're running this from) so Hand Control can"
-say  "simulate key presses on your behalf. When Hand Control also"
-say  "asks for Automation later, click Allow."
+say  "Enable Blind Monkey, and the Python that runs the server (your .venv is"
+say  "listed in the first-run banner as \"Python:\"). The menu-bar app alone is"
+say  "not the same process as the server — both may need a checkmark."
+say  "If System Events or Automation is denied, allow it when asked."
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
 
 # --- Farewell --------------------------------------------------------------
@@ -254,9 +290,9 @@ Y="$(printf '\033[33m')"      # yellow
 
 printf '%s\n' "\
   1.  ${B}Launch Hand Control${R}
-      Click the Hand Control icon in your Dock,
-      or double-click the 'Hand Control' shortcut on your Desktop.
-      (Cmd+Space → \"Hand Control\" → Return also works.)
+      Click the Blind Monkey icon in your Dock,
+      or double-click the 'Blind Monkey' shortcut on your Desktop.
+      (Cmd+Space → \"Blind Monkey\" → Return also works.)
       A Terminal window opens with a scannable QR code.
 
   2.  ${B}Point your phone's camera at the QR code${R}
@@ -270,13 +306,14 @@ printf '%s\n' "\
       permanently — no more warning on every launch.
 
   4.  ${B}Start talking${R}
-      Swipe between Cursor windows, press-and-hold to dictate,
-      tap Submit to queue the message in Cursor.
+      Swipe between Cursor windows, press-and-hold to dictate.
+      Release — the transcription appears on your phone.
+      Edit if needed, then tap Send to queue the message in Cursor.
 "
 
-if [ "$WISPR_INSTALLED" -eq 0 ]; then
-  printf '  %sReminder:%s install Wispr Flow (https://wisprflow.ai) and\n' "$Y" "$R"
-  printf '  set its dictation hotkey to %sRight Option%s before you test.\n\n' "$B" "$R"
+if [ -z "${EXISTING_KEY:-}" ]; then
+  printf '  %sReminder:%s set OPENAI_API_KEY in %s~/.hand-control.env%s before\n' "$Y" "$R" "$B" "$R"
+  printf '  you try to dictate, or phone holds will fail with an error.\n\n'
 fi
 
 printf '%s\n' "\

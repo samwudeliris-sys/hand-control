@@ -1,22 +1,33 @@
 # Hand Control
 
-**Your phone, as a remote for dictating into multiple Cursor windows.**
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20peer-lightgrey.svg)](./peer/README.md)
+
+**Your phone, as a mic + remote for dictating into multiple Cursor windows.**
+
+Public repo: **[github.com/spdoub/cursor-hand-control](https://github.com/spdoub/cursor-hand-control)** (formerly `hand-control`).
 
 Turn your phone into a touch-screen remote that lets you:
 
 1. See every open Cursor window as a swipeable card.
 2. Swipe to pick which window you want to talk to.
-3. Press-and-hold anywhere on the card to dictate into it.
-4. Let go — Wispr Flow transcribes and types into the window.
-5. Two buttons light up at the bottom:
-   - **Submit** → presses Option+Enter (queues the message in Cursor)
-   - **Delete** → presses Cmd+Z (undoes the dictation)
-6. If Wispr's "press enter" voice command auto-submits for you, the
-   phone shows a green "✓ Sent" confirmation and skips the buttons.
+3. Press-and-hold anywhere on the card to dictate into it — your
+   **phone's microphone** is recording.
+4. Let go — the audio uploads to your Mac, gets transcribed by OpenAI
+   Whisper, and the text appears in an editable textarea on your
+   phone a second later.
+5. Two buttons at the bottom:
+   - **Send (↵)** → pastes the (possibly edited) text into the
+     selected Cursor window and queues it with Option+Enter.
+   - **X** → first tap clears the textarea so you can re-type or
+     re-hold; second tap cancels the whole utterance.
+6. By default, Hand Control leaves Cursor's current layout alone when
+   you switch windows. If you want the old "try to jump straight into
+   chat" behavior, you can opt into it with `HC_AUTO_FOCUS_CHAT=1`
+   (see configuration below).
 7. Tap **Pad** in the header to flip the whole surface into a
-   **trackpad** — drag to move the Mac cursor, tap to click. Handy
-   when Cursor's chat input isn't focused and you need to click back
-   into it without walking back to the keyboard.
+   **trackpad** — drag to move the Mac cursor, tap to click.
 8. Tap **Stick** in the header to turn the deck into a **virtual
    joystick**. Touch anywhere on the deck to drop the stick's
    origin there, drag to drive the Mac cursor (the farther you
@@ -24,8 +35,10 @@ Turn your phone into a touch-screen remote that lets you:
    tap without dragging is a left click. Toggle off to go back to
    normal swipe-and-hold behavior.
 
-Your AirPods (connected to your Mac) are still the mic. The phone is just a
-remote control — **no audio ever goes over the network**.
+The phone becomes the mic; your AirPods (or any other Mac mic) aren't
+involved in this flow. If you're just coding on your Mac without the
+phone in hand, you can still use **Wispr Flow** as usual — Hand
+Control doesn't touch the Right Option key when no phone is driving.
 
 ---
 
@@ -37,30 +50,49 @@ remote control — **no audio ever goes over the network**.
 - **Python 3.10+** — the installer will offer to install it for you
   via Homebrew if it's missing
 - **[Cursor](https://cursor.com)** — the app Hand Control drives
-- **[Wispr Flow](https://wisprflow.ai)** — for the actual voice-to-
-  text; set its dictation hotkey to **Right Option**
-- **A phone** (iPhone or Android) on the same Wi-Fi as your Mac
+- An **OpenAI API key** — the phone's mic is transcribed via
+  [Whisper](https://platform.openai.com/docs/guides/speech-to-text).
+  Grab one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+  The installer asks for it and writes it to `~/.hand-control.env`
+  (gitignored). You can also just export `OPENAI_API_KEY` in your shell.
+- **A phone** (iPhone or Android) on the same Wi-Fi as your Mac, or
+  connected via [Tailscale](#tailscale) if you're off your home network.
+- *(Optional)* **[Wispr Flow](https://wisprflow.ai)** — handy for
+  the times you're coding on your Mac without the phone. Hand Control
+  doesn't drive Wispr itself; you just use its Right Option hotkey
+  directly as you always did.
 
 ### Install
 
 Open Terminal, paste this:
 
 ```bash
-git clone https://github.com/samwudeliris-sys/hand-control.git
-cd hand-control
+git clone https://github.com/spdoub/cursor-hand-control.git
+cd cursor-hand-control
 ./install.sh
 ```
 
 The installer is a 6-step guided walkthrough — Python check, deps
 install, cert pre-generation, `Hand Control.app` bundle build,
-Wispr Flow detection, and macOS Accessibility prompt. Everything
+OpenAI API key setup, and macOS Accessibility prompt. Everything
 is idempotent — rerun any time.
 
 ### Launch
 
-Cmd+Space → type **Hand Control** → Return. A Terminal window opens
-with a QR code. Scan it with your iPhone camera and tap the
-notification to open the phone remote.
+From this doc, click:
+
+<p>
+  <a href="./Start%20Blind%20Monkey.command"><strong>Start Blind Monkey</strong></a>
+</p>
+
+That shortcut opens Terminal, starts Blind Monkey if it is not already
+running, and shows the phone link/QR fallback for this beta. In the
+real native version, users will just open the Blind Monkey app on
+their phone.
+
+You can also use Spotlight: Cmd+Space → type **Blind Monkey** →
+Return. It uses the same launch flow: text the link when configured,
+or show the QR fallback.
 
 **One-time on your phone (~45 seconds)** — stop Safari nagging
 "Not Private" on every launch:
@@ -78,7 +110,8 @@ Reload the Hand Control tab. Warning gone forever. Tap the
 Safari share icon → **Add to Home Screen** for a proper app icon.
 
 **That's it.** Swipe between Cursor windows, press-and-hold to
-dictate, tap **Submit** to queue the message in Cursor.
+dictate, release, review/edit the transcript that appears, tap
+**Send** to queue the message in Cursor.
 
 Right-click the Dock icon → *Options → Keep in Dock* for one-click
 future launches.
@@ -117,82 +150,75 @@ See the full walkthrough in **"Two-machine mode (Mac + PC)"** below.
 
 ## Why?
 
-If you dictate code with Wispr Flow and juggle multiple Cursor windows, you
-know the dance: click into a window, hold `Fn`, talk, release, press Enter,
-repeat for the next window. Hand Control collapses that into a single
-touch-and-hold on your phone while you keep your eyes on your Mac screen.
+If you juggle multiple Cursor windows and want to dictate into them
+while you're away from the keyboard (or even just lounging on the
+couch), you know the dance: walk back to the Mac, click into the
+right window, click the chat box, dictate, tap Enter. Hand Control
+collapses all of that into a single touch-and-hold on your phone.
+You can be on the couch or even on another network — as long as the
+phone can reach the Mac, you can queue up messages.
 
 ---
 
 ## How it works
 
 ```
-┌────────────────────┐     WebSocket      ┌────────────────────────┐
-│   Phone (browser)  │  ◄──────────────►  │  Mac (Python server)   │
-│   landscape remote │                    │                        │
-└────────────────────┘                    │  ┌──────────────────┐  │
-                                          │  │   AppleScript    │  │
-                                          │  │ (list + focus    │  │
-                                          │  │  Cursor windows) │  │
-                                          │  └──────────────────┘  │
-                                          │  ┌──────────────────┐  │
-                                          │  │  CoreGraphics    │  │
-                                          │  │  (simulate Right │  │
-                                          │  │  Option + Enter) │  │
-                                          │  └──────────────────┘  │
-                                          │  ┌──────────────────┐  │
-                                          │  │  CGEventTap      │  │
-                                          │  │  (know when      │  │
-                                          │  │  Wispr stops     │  │
-                                          │  │  typing)         │  │
-                                          │  └──────────────────┘  │
-                                          └────────────────────────┘
-                                                     │
-                                                     ▼
-                                            ┌──────────────────┐
-                                            │   Wispr Flow     │
-                                            │   (activated by  │
-                                            │   Right Option)  │
-                                            └──────────────────┘
+┌────────────────────┐      WebSocket       ┌────────────────────────┐
+│  Phone (browser)   │                      │  Mac (Python server)   │
+│  • mic capture     │ ───── audio blob ──► │                        │
+│  • level meter     │                      │  ┌──────────────────┐  │
+│  • transcript edit │ ◄──  transcript ──── │  │ OpenAI Whisper   │  │
+│  • Send / X        │                      │  │ (HTTPS API)      │  │
+└────────────────────┘ ───── text on send ► │  └──────────────────┘  │
+                                            │  ┌──────────────────┐  │
+                                            │  │ Focus window     │  │
+                                            │  │ Cmd+L chat focus │  │
+                                            │  │ Paste + Opt+Ent  │  │
+                                            │  └──────────────────┘  │
+                                            └────────────────────────┘
 ```
 
-When you hold on the phone:
+When you hold on a card:
 
-1. Server focuses the currently-selected Cursor window (AppleScript).
-2. Server presses and holds **Right Option** — Wispr Flow's activation
-   hotkey.
-3. You talk. Your AirPods send audio to your Mac. Wispr transcribes.
-4. You release on the phone. Server releases Right Option.
-5. A global `CGEventTap` watches keystrokes. When Wispr has been quiet
-   for 400ms (i.e., finished typing), the server tells the phone the
-   Submit / Delete buttons are ready. For apps that don't route
-   dictated text through visible keystrokes (Cursor's chat input, most
-   Electron apps), the server falls back to a heuristic delay based on
-   how long you held — typically 0.4–2s.
-6. You tap one:
-   - **Submit** → server presses **Option+Enter** — Cursor's
-     "queue message" shortcut. If the agent is busy, your message
-     is appended to the queue to run after the current task finishes.
-     If the agent is idle, it just submits normally.
-   - **Delete** → server presses Cmd+Z to undo Wispr's insertion.
-7. If Wispr's "press enter" voice command auto-submitted for you
-   (i.e. you said "...press enter" at the end of your dictation), the
-   server notices the Return keystroke and the phone shows a green
-   "✓ Sent via 'press enter'" confirmation instead — no buttons to tap.
+1. Phone requests mic permission (first time only), then starts a
+   `MediaRecorder` against `navigator.mediaDevices.getUserMedia`. The
+   active card shows a live level meter so you can see the mic is
+   actually picking you up.
+2. Server focuses the selected Cursor window (AppleScript). If you've
+   opted into `HC_AUTO_FOCUS_CHAT=1`, it also presses **Cmd+L** to try
+   to move focus into Cursor's chat input.
 
-If you'd rather have Submit interrupt the current agent run, set
+When you release:
+
+3. Phone stops the recorder, sends the whole audio blob over the
+   WebSocket (one binary frame), then a `hold_end` JSON message.
+4. Server forwards the blob to OpenAI Whisper. Whisper returns text.
+5. Server pushes the text back to the phone. The card flips to an
+   editable textarea with the keyboard up.
+
+Now it's your move:
+
+6. **Edit** anything that came out wrong (it's a normal textarea —
+   tap, select, backspace, type). The Mac hasn't typed anything yet.
+7. **X** wipes the textarea (first tap) or cancels the whole
+   utterance (second tap / already-empty).
+8. **Send** ships the final text to the Mac, which:
+   - focuses the selected Cursor window,
+   - pastes the text via the clipboard (unicode-safe, instant),
+   - presses **Option+Enter** — Cursor's "queue message" shortcut. If
+     the agent is busy, your message is appended to the queue; if
+     it's idle, it just submits.
+
+If you'd rather have Send interrupt the current agent run, set
 `QUEUE_INSTEAD_OF_INTERRUPT = False` in `server/main.py` to fall back
 to plain Enter.
 
-> **Why no transcription preview on the phone?**
-> An earlier version of Hand Control tried to show the transcribed
-> text on the phone by reading Cursor's chat input via the macOS
-> Accessibility API. Cursor (like most Electron apps) hides its text
-> content from external AX observers, and Wispr's text insertion
-> doesn't always generate visible keystrokes. The result was false
-> "no text detected" warnings on dictations that actually worked.
-> Rather than show unreliable data, the phone now just shows the
-> Submit / Delete buttons and trusts you to glance at your Mac.
+### Using Wispr Flow on the Mac without the phone
+
+Hand Control no longer touches the Right Option modifier, so Wispr
+Flow keeps working exactly like it always did — just press Right
+Option on your Mac keyboard when you're coding without the phone in
+hand. The two flows coexist cleanly.
 
 ---
 
@@ -221,14 +247,30 @@ access to control System Events."* Click **OK**. If you accidentally
 click Don't Allow, fix it at *System Settings → Privacy & Security →
 Automation → your terminal → enable System Events.*
 
-### Wispr Flow configuration
+### OpenAI / Whisper configuration
 
-- **Activation hotkey** → `Right Option` (the Alt/Option key on the
-  right side of your keyboard). Chosen because it's a single
-  physical key, rarely bound to anything else, and cleanly
-  simulatable programmatically (unlike `Fn`).
-- **Input device** → your AirPods, or "System default" if your
-  AirPods are already the Mac's default mic.
+- **`OPENAI_API_KEY`** — required. `install.sh` writes it to
+  `~/.hand-control.env`, and `run.sh` sources that file at startup.
+  You can also just `export OPENAI_API_KEY=…` in the shell that
+  launches `./run.sh`.
+- **`HC_TRANSCRIBE_MODEL`** — defaults to `whisper-1`. For higher
+  quality and often lower cost on short clips, set it to
+  `gpt-4o-mini-transcribe` or `gpt-4o-transcribe`.
+- **`HC_TRANSCRIBE_LANGUAGE`** — optional ISO-639-1 hint (e.g. `en`)
+  if Whisper keeps mis-detecting your language on noisy short clips.
+- **`HC_WHISPER_PROMPT`** — optional bias string (max ~224 tokens for
+  `whisper-1`). Useful for nudging toward code-heavy vocabulary:
+  `export HC_WHISPER_PROMPT="async, useEffect, FastAPI, kubectl"`.
+
+The phone never records audio to disk and never sends it anywhere
+except your Mac; your Mac forwards it to OpenAI over HTTPS.
+
+### Wispr Flow (optional, Mac-only fallback)
+
+Hand Control doesn't drive Wispr at all anymore. If you want to
+dictate from the Mac itself without the phone in hand, just install
+Wispr Flow and use its Right Option hotkey as normal — the two flows
+coexist.
 
 ### The HTTPS cert, in more detail
 
@@ -250,6 +292,27 @@ The banner prints a stable `.local` URL like
 `https://MacBook-Air.local:8000`. That's your Mac's Bonjour/mDNS
 hostname — it stays the same across networks and DHCP renewals.
 Bookmark it once on your phone and it keeps working.
+
+### Tailscale
+
+Use this when the phone is not on the same Wi‑Fi. The server already
+listens on all interfaces (`0.0.0.0`). With [Tailscale](https://tailscale.com)
+on the Mac and the phone:
+
+1. Run **`tailscale up`** on the Mac (and sign in the phone app).
+2. Start Hand Control — the banner lists **Tailscale** URLs (MagicDNS
+   and `100.x`). The TLS cert **includes** those names automatically
+   when Tailscale is running; if you start Tailscale *after* the first
+   cert was created, restart Hand Control once so it can regenerate.
+3. On the phone, open the **`/install`** URL shown for Tailscale in the
+   banner and complete the same cert-trust steps as on LAN — you need
+   a profile per hostname you use (`.local` vs Tailscale name).
+4. Optional: **`HC_QR_USE_TAILSCALE=1 ./run.sh`** makes the terminal
+   QR encode the MagicDNS URL instead of `.local`. **`HC_QR_HOST=…`**
+   forces a specific host.
+
+Manual SAN overrides (e.g. CLI can’t see MagicDNS): **`HC_TAILSCALE_DNS`**
+and **`HC_TAILSCALE_IP`** (comma-separated).
 
 ### Add to Home Screen
 
@@ -279,14 +342,15 @@ the top-right of the header.
 │ (Push) (Continue) (Fix) (Tests) (Plan) (Approve)    │   ← preset pills
 ├─────┬─────────────────────────────────────────┬─────┤
 │     │                                         │     │
-│peek │                                         │ peek│
-│ ◂▬▸ │            PROJECT-A                    │ ◂▬▸ │
-│     │                                         │     │
-│     │           ●   hold to talk              │     │
-│     │                                         │     │
+│peek │            PROJECT-A                    │ peek│
+│ ◂▬▸ │    ╭───────────────────────────────╮    │ ◂▬▸ │
+│     │    │  Hey, could you fix the bug   │    │     │
+│     │    │  in foo.py where the async    │    │     │
+│     │    │  handler drops the first msg? │    │     │
+│     │    ╰───────────────────────────────╯    │     │
 │     ├──────────────────┬──────────────────────┤     │
-│     │      DELETE      │       SUBMIT         │     │
-│     │       (✕)        │        (↵)           │     │
+│     │        X         │         SEND         │     │
+│     │       (✕)        │         (↵)          │     │
 └─────┴──────────────────┴──────────────────────┴─────┘
 ```
 
@@ -297,24 +361,24 @@ the top-right of the header.
 - **Card deck** (main area) — one full-bleed card per Cursor window.
   Adjacent cards peek at the edges so you always know there's more.
   - **Swipe horizontally** → glide to the previous / next card.
-  - **Press and hold** anywhere on the card → dictate into that window.
-    A short (~140 ms) commit delay disambiguates swipe from hold
-    automatically; it feels instant.
-  - When you hold, the active card glows accent-red and a pulse
-    ripples outward so you can tell at a glance the mic is live.
-- **Bottom buttons** — light up after Wispr finishes typing:
-  - **Delete (✕)** — tap to undo (Cmd+Z).
-  - **Submit (↵)** — tap to send Option+Enter.
-- **Green "✓ Sent" pill** — appears inside the card when Wispr's
-  "press enter" voice command already submitted the message, then
-  auto-dismisses after a few seconds.
+  - **Press and hold** anywhere on the card → start recording on the
+    phone's mic. A short (~140 ms) commit delay disambiguates swipe
+    from hold. The card glows accent-red and a live **level meter**
+    confirms the mic is picking you up. First hold prompts iOS for
+    mic permission — allow it once.
+  - **Release** → audio uploads to the Mac, Whisper transcribes, and
+    the card flips to an **editable textarea** with the software
+    keyboard up. Takes ~1–2 s over LAN/Tailscale.
+- **Bottom buttons** (in edit mode):
+  - **X (✕)** — first tap clears the textarea; second tap (or tap on
+    an already-empty textarea) cancels the utterance entirely.
+  - **Send (↵)** — pastes the text into the selected Cursor window
+    and presses Option+Enter (queue) / Enter.
 
-Changing card — whether by swipe or pager-dot tap — also raises that
-Cursor window to the front on your Mac, so you always see which one
-you're about to dictate to.
-
-While waiting for Wispr to finish, the buttons pulse; once ready, they
-become solid and tappable.
+Changing card — whether by swipe or pager-dot tap — raises that
+Cursor window to the front on your Mac. If you enable
+`HC_AUTO_FOCUS_CHAT=1`, Hand Control also tries Cursor's chat-focus
+shortcut after the window switch.
 
 ### Pad mode (trackpad)
 
@@ -349,8 +413,8 @@ tap to click it back, then flip to Deck and keep dictating.
   click. Always available; handy when you want to right-click without
   a second finger.
 
-Pad mode cleanly suspends any in-flight dictation (releases Right
-Option, resets the post-dictation state), so flipping between modes
+Pad mode cleanly suspends any in-flight dictation (stops the
+recorder, clears the transcript preview), so flipping between modes
 is always safe.
 
 ### Joystick mode (on the Deck page)
@@ -391,8 +455,10 @@ Running Hand Control on a **Mac + Windows PC sitting side by side** turns
 the phone into a universal controller. Key abilities:
 
 - **Unified card deck** — Cursor windows from *both* machines appear in
-  the same swipeable deck, each tagged with a `MAC` or `PC` badge. Hold
-  to dictate works on either machine (each runs its own Wispr Flow).
+  the same swipeable deck, each tagged with a `MAC` or `PC` badge.
+  Hold to dictate works for either machine; the phone captures audio
+  once, transcribes via Whisper on the Mac, then the text is typed into
+  whichever machine owns the selected window (via the peer for PC).
 - **Edge-crossing trackpad** — in Pad mode, drag the Mac cursor off
   the configured edge and it seamlessly picks up on the PC. A pill in
   the corner of the trackpad (`MAC` / `PC`) shows which machine
@@ -448,38 +514,33 @@ without it. Skip this on a home network.
 
 ## Configuration
 
-### Change the "Wispr is done" detection delay
+### Transcription tweaks
 
-Edit the defaults on `KeystrokeWatcher.wait_for_typing_to_settle` in
-`server/keystroke_watcher.py`:
+See [OpenAI / Whisper configuration](#openai--whisper-configuration)
+above for `HC_TRANSCRIBE_MODEL`, `HC_TRANSCRIBE_LANGUAGE`, and
+`HC_WHISPER_PROMPT`.
 
-```python
-idle_ms=400,              # how long Wispr must be quiet before buttons light up
-first_key_timeout_s=2.5,  # give up waiting for the first keystroke after this
-max_wait_s=10.0,          # hard cap on total wait
+### Enable the legacy auto-focus of Cursor's chat input
+
+Older versions of Hand Control pressed **Cmd+L** after every window
+focus so a fresh hold would try to land in Cursor's chat input rather
+than the code editor. In newer Cursor layouts, `Cmd+L` can behave like
+an AI-sidebar toggle, which means it may close an already-open chat
+box. So this behavior is now **off by default**.
+
+If you still want it, opt in with:
+
+```bash
+export HC_AUTO_FOCUS_CHAT=1
 ```
 
-When the event tap can see Wispr's keystrokes, these knobs control when
-the Submit / Delete buttons appear. When it can't (Cursor's chat input,
-most Electron apps), the server falls back to a heuristic
-`0.4s + 30% of hold duration` instead.
-
-### Change the activation hotkey
-
-Edit `server/key_control.py` — change `KEYCODE_RIGHT_OPTION` to a different
-keycode (see
-[this list](https://eastmanreference.com/complete-list-of-applescript-key-codes))
-and set the matching hotkey in Wispr Flow's settings.
+You can also tune the delay between raising the window and firing
+the hotkey with `HC_AUTO_FOCUS_CHAT_DELAY_MS` (default `120`).
 
 ### Change the target app
 
 Edit `server/cursor_windows.py` — replace `"Cursor"` in the AppleScript
 with another app name (e.g., `"Code"` for VS Code, `"iTerm2"` for iTerm).
-
-### Control a different hold-to-talk tool
-
-The server is Wispr-agnostic. Any dictation tool that activates on a hold
-hotkey and types into the focused window works.
 
 ### Run on a different port
 
@@ -552,13 +613,25 @@ browser on your LAN to see exactly what the server loaded.
 
 ## Troubleshooting
 
-**The server prints `Failed to create event tap`.**
-Accessibility permission isn't granted, or the terminal binary that's
-actually running Python doesn't have it. Check System Settings →
-Accessibility, make sure your terminal app is enabled, then restart the
-server. Without the event tap, the server falls back to a heuristic
-delay before lighting up the Submit / Delete buttons — it still works,
-just less precisely.
+**The server prints `OpenAI: NO KEY`.**
+Set `OPENAI_API_KEY` in `~/.hand-control.env` or export it in the
+shell that runs `./run.sh`. Dictation needs it; everything else
+(swipe, Pad mode, presets) still works without.
+
+**Phone says "Microphone permission denied".**
+On iOS: Settings → Safari → Microphone → allow for the Hand Control
+site. If you added to Home Screen, the permission is per-PWA — long-
+press the icon to delete it, reload the site in Safari, grant mic,
+then re-add to Home Screen.
+
+**Transcription error "HTTP 401".**
+Invalid or missing OpenAI key. Check `~/.hand-control.env` and retry.
+
+**Transcription is slow.**
+Each hold ends with a single Whisper request; round-trip on a good
+connection is 1–2 s. If it's routinely >4 s, try
+`export HC_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe` which is usually
+faster than `whisper-1` on short clips.
 
 **Phone shows "No Cursor windows detected".**
 Either Cursor isn't running, or Automation permission for System Events
@@ -613,23 +686,15 @@ Some networks block mDNS / Bonjour between clients. Fall back to the IP
 URL printed in the banner. If Bonjour works but is slow, it may take
 a couple of seconds the first time.
 
-**Holding works but Wispr doesn't start.**
-Wispr Flow isn't running, or its hotkey isn't `Right Option`. Double-check
-the hotkey in Wispr's settings.
+**Send lands in the code editor, not Cursor's chat input.**
+If you have `HC_AUTO_FOCUS_CHAT=1` enabled, the Cmd+L auto-focus may
+have fired before Cursor was actually frontmost. Bump the delay:
+`HC_AUTO_FOCUS_CHAT_DELAY_MS=200 ./run.sh`.
 
-**Submit button lights up too early or too late.**
-Adjust the defaults on `wait_for_typing_to_settle` in
-`server/keystroke_watcher.py`. For slower / longer transcriptions, try
-`idle_ms=600` — `800`.
-
-**Delete doesn't fully remove the dictation.**
-Delete sends Cmd+Z (undo), which works if Wispr pastes text in one shot.
-If Wispr simulated keystrokes in a way the app groups differently, Cmd+Z
-may only undo part of it. Tap Delete again to continue undoing.
-
-**The server kills any held modifier on disconnect.**
-Intentional. If your phone drops Wi-Fi mid-hold, we release Right Option
-so you aren't stuck with a modifier pressed forever.
+**Clipboard got overwritten.**
+Hand Control saves and restores the clipboard around each paste.
+If you notice something missing, it's likely because you copied
+something else *during* the ~250 ms paste window. Copy again.
 
 ---
 
@@ -638,15 +703,18 @@ so you aren't stuck with a modifier pressed forever.
 ```
 server/
   main.py                  FastAPI app, WebSocket endpoint, orchestration
+  certs.py                 Self-signed TLS certs (Bonjour + Tailscale SANs)
+  clipboard.py             NSPasteboard save/restore + Cmd+V paste helper
+  transcribe.py            OpenAI Whisper client (httpx, no SDK)
   cursor_windows.py        AppleScript: list + focus Cursor windows
-  key_control.py           CoreGraphics: simulate keys (Right Option,
-                           Enter, Option+Enter, Cmd+Z, Unicode typing)
-  keystroke_watcher.py     CGEventTap: detect when Wispr stops typing
-                           and when Wispr auto-presses Return
+  key_control.py           CoreGraphics: simulate keys (Enter, Option+Enter,
+                           Cmd+L, Cmd+Z, Unicode typing)
+  keystroke_watcher.py     CGEventTap (kept for optional hotkeys; no longer
+                           used in the phone dictation path)
   mouse_control.py         CoreGraphics: simulate cursor moves, clicks,
                            and scroll wheel events (trackpad mode)
   peer.py                  HTTP client for the Windows peer agent
-                           (window polling, mouse forwarding, dictation)
+                           (window polling, mouse forwarding, typing)
   virtual_cursor.py        Virtual cursor state for cross-machine
                            edge crossing (Mac + PC unified coords)
   presets.py               Load + validate one-tap preset prompts
@@ -680,13 +748,19 @@ No build step, no frontend framework, no database. Single
 - The server binds to `0.0.0.0:8000` so your phone on the LAN can reach
   it. Anyone on the same Wi-Fi network can also reach it — including
   anyone who could type keys into your Cursor windows through it.
-  Run on trusted networks only.
+  Run on trusted networks only, or use Tailscale.
 - There is no authentication. This is a tool for your own laptop.
-- All audio stays on your Mac. The phone never records or transmits
-  audio.
+- Audio flow: phone → your Mac (WebSocket binary frame) → OpenAI
+  Whisper (HTTPS) → transcript back. Audio is held in memory on the
+  Mac only long enough to POST it to OpenAI and is never written to
+  disk. If you don't want to send audio to OpenAI, don't set
+  `OPENAI_API_KEY` and Hand Control's trackpad / preset / window
+  focus features still work without dictation.
 
-If you want to expose this beyond your LAN, put it behind Tailscale — it
-"just works" and adds authentication and encryption for free.
+If you want to use the phone off your home Wi‑Fi, use **Tailscale** on
+the Mac and phone — see [Tailscale](#tailscale) above.
+Traffic stays inside your tailnet; there is still no login on Hand Control
+itself, so only trusted devices should be in that tailnet.
 
 ---
 

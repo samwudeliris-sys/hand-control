@@ -1,25 +1,16 @@
-"""Hand Control — Mac server.
+"""Blind Monkey — Mac server.
 
 Serves the phone UI and handles phone → Mac control events over WebSocket.
 
-Control flow:
-    phone hold_start
-        → focus selected Cursor window
-        → press-and-hold Right Option (Wispr Flow hotkey)
+Control flow (audio is phone mic → OpenAI Whisper, not the Mac’s mic):
 
-    phone hold_end
-        → release Right Option
-        → wait for Wispr to finish typing (CGEventTap keystroke watcher)
-        → send "transcription_ready" to phone so it enables Submit / Delete
-
-    phone submit        → press Option+Enter (Cursor's "queue message"
-                          shortcut — message is appended after the current
-                          agent run instead of interrupting it)
-    phone delete        → press Cmd+Z (undo Wispr's last insertion)
-
-    phone switch_prev / switch_next / select
-        → update the server-side selected window index
-        → focus that window immediately so user can see which one is active
+    phone hold_start   → focus selected Cursor window, clear audio buffer
+    phone hold_end     → transcribe audio via Whisper, push final_transcript
+    phone submit       → paste + Option+Enter (queue) or Enter (send)
+    phone delete       → Cmd+Z (Mac) / peer delete (PC)
+    switch / select     → refocus the chosen Cursor window
+    mouse_move / click / scroll → synthetic HID events (requires Accessibility
+                          for the **Python** process that runs this server)
 """
 
 from __future__ import annotations
@@ -35,6 +26,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 def _fail_fast_if_wrong_platform() -> None:
@@ -44,7 +36,7 @@ def _fail_fast_if_wrong_platform() -> None:
     """
     if platform.system() != "Darwin":
         sys.stderr.write(
-            "\nHand Control only runs on macOS.\n"
+            "\nBlind Monkey only runs on macOS.\n"
             "It drives AppleScript, CoreGraphics, and CGEventTap, which are\n"
             f"Apple-only APIs. Current platform: {platform.system()}.\n\n"
         )
@@ -80,25 +72,32 @@ try:
 except Exception:  # pragma: no cover
     _QUARTZ_DISPLAY_OK = False
 
-from .certs import ensure_cert
-from .cursor_windows import CursorWindow, focus_window, list_windows
+from .certs import ensure_cert, get_tailscale_sans
+from .clipboard import paste_text
+from .cursor_windows import (
+    CursorWindow,
+    focus_window,
+    last_list_error,
+    list_windows,
+)
 from .mouse_control import mouse_click, mouse_move_by, mouse_scroll
 from .key_control import (
-    press_cmd_l,
     press_cmd_z,
     press_enter,
     press_option_enter,
-    right_option_down,
-    right_option_up,
     type_string,
 )
-from .keystroke_watcher import KeystrokeWatcher
 from .peer import Peer, PeerWindow
 from .presets import Preset, load_presets
+from .relay_client import RelayClientConnection, connect_relay_forever
+from .transcribe import TranscriptionError, transcribe_m4a
 from .virtual_cursor import ScreenLayout, VirtualCursor
 
 PHONE_DIR = Path(__file__).resolve().parent.parent / "phone"
 POLL_INTERVAL_S = 1.0
+# Throttle log lines when the user is moving the on-phone trackpad without AX.
+_AX_INPUT_LOG_INTERVAL_S = 8.0
+_last_ax_input_warn: float = 0.0
 
 # Cursor keyboard behavior:
 #   Enter         → submit (may interrupt current agent run)
@@ -110,17 +109,12 @@ POLL_INTERVAL_S = 1.0
 QUEUE_INSTEAD_OF_INTERRUPT = True
 
 
-# Auto-focus Cursor's chat input after every window-focus. Fires
-# Cmd+L on Mac / Ctrl+L on the PC peer. The phone's swipe ends up
-# on a ready-to-dictate text field instead of (often) the code
-# editor. Set ``HC_AUTO_FOCUS_CHAT=0`` in the env to disable.
-_AUTO_FOCUS_CHAT = os.environ.get("HC_AUTO_FOCUS_CHAT", "1").strip() != "0"
-# Delay between raising the window and firing the hotkey. macOS
-# propagates frontmost-app changes asynchronously; without this the
-# hotkey can race ahead to whatever was frontmost BEFORE Cursor.
-# Override with HC_AUTO_FOCUS_CHAT_DELAY_MS.
-_AUTO_FOCUS_CHAT_DELAY_S = (
-    max(0, int(os.environ.get("HC_AUTO_FOCUS_CHAT_DELAY_MS", "120").strip()))
+# Delay between raising a window and typing/pasting into it. macOS /
+# Windows propagate frontmost-app changes asynchronously; without this
+# the synthesized paste/type can race ahead to whatever app was
+# frontmost BEFORE Cursor.
+_FOCUS_SETTLE_DELAY_S = (
+    max(0, int(os.environ.get("HC_FOCUS_SETTLE_DELAY_MS", "120").strip()))
     / 1000.0
 )
 
@@ -138,10 +132,16 @@ class State:
         # reorders the window list whenever we focus something.
         self.selected_title: Optional[str] = None
         self.selected_host: str = "mac"  # 'mac' | 'pc'
-        self.clients: set[WebSocket] = set()
-        self.watcher = KeystrokeWatcher()
+        self.clients: set[object] = set()
         self.lock = asyncio.Lock()
         self.hold_start_ts: Optional[float] = None
+        # Audio buffer for the currently-in-flight hold. The phone
+        # streams ``audio/mp4`` (AAC) chunks as WebSocket binary frames
+        # between ``hold_start`` and ``hold_end``; we append them here
+        # and hand the whole blob to Whisper when the hold ends.
+        # Single-phone assumption — if two phones hold at once, the
+        # later one wins. That's fine for a personal tool.
+        self.audio_buffer: bytearray = bytearray()
         # Presets are loaded once at startup. Users who edit
         # presets.json while the server is running can restart to pick
         # up changes.
@@ -206,10 +206,13 @@ class State:
                 "hostname": self.peer.state.hostname,
                 "side": self.peer.state.side,
             }
+        lerr = last_list_error()
         return {
             "type": "state",
             "windows": self._all_windows(),
             "selected": self._selected_index(),
+            "accessibility": {"trusted": _check_accessibility()},
+            "list_windows_error": lerr,
             # Send only the public-safe view (id, label, submit mode) —
             # the actual prompt text stays server-side.
             "presets": [p.to_public_dict() for p in self.presets],
@@ -233,7 +236,7 @@ state = State()
 
 async def broadcast(payload: dict) -> None:
     message = json.dumps(payload)
-    dead: list[WebSocket] = []
+    dead: list[object] = []
     for client in state.clients:
         try:
             await client.send_text(message)
@@ -243,9 +246,22 @@ async def broadcast(payload: dict) -> None:
         state.clients.discard(c)
 
 
+async def _send_to_client(client: object, payload: dict) -> None:
+    await client.send_text(json.dumps(payload))
+
+
 async def poll_windows() -> None:
-    """Periodically refresh the list of open Cursor windows."""
+    """Periodically refresh the list of open Cursor windows.
+
+    Re-broadcasts not only when the window list changes but also when
+    **Accessibility** trust or the last AppleScript list error changes
+    (same window set, but user just toggled a permission) — otherwise the
+    phone can stay on \"Mac access needed\" forever.
+    """
+    global _last_ax_input_warn
     prev_key: tuple = ()
+    prev_ax: Optional[bool] = None
+    prev_err: Optional[str] = None
     while True:
         try:
             windows = list_windows()
@@ -257,21 +273,33 @@ async def poll_windows() -> None:
         windows.sort(key=_sort_key)
 
         key = tuple((w.title, w.project) for w in windows)
-        async with state.lock:
-            if key != prev_key:
-                state.windows = windows
-                # If the previously selected window went away, fall back to
-                # the first available. Otherwise the selection sticks with
-                # the same window by title.
-                titles = {w.title for w in windows}
-                if state.selected_title not in titles:
-                    state.selected_title = windows[0].title if windows else None
-                prev_key = key
+        ax = _check_accessibility()
+        err = last_list_error()
+        list_changed = key != prev_key
+        meta_changed = ax != prev_ax or err != prev_err
+        if list_changed or meta_changed:
+            if ax and not (prev_ax is True):
+                # User likely just granted AX — allow immediate trackpad log again.
+                _last_ax_input_warn = 0.0
+            if list_changed:
+                async with state.lock:
+                    state.windows = windows
+                    titles = {w.title for w in windows}
+                    if state.selected_title not in titles:
+                        state.selected_title = windows[0].title if windows else None
+                    prev_key = key
                 print(
                     f"[windows] updated ({len(windows)}): "
                     + ", ".join(f"{i}={w.project}" for i, w in enumerate(windows))
                 )
-                await broadcast(state.to_payload())
+            elif meta_changed:
+                print(
+                    f"[state] trust={ax} (was {prev_ax}) "
+                    f"list_error={err!r} (was {prev_err!r})"
+                )
+            prev_ax = ax
+            prev_err = err
+            await broadcast(state.to_payload())
         await asyncio.sleep(POLL_INTERVAL_S)
 
 
@@ -289,6 +317,8 @@ async def _broadcast_cursor_host(host: str) -> None:
 
 
 async def _dispatch_mouse_move(dx: float, dy: float) -> None:
+    if not _ax_allows_synthetic_input():
+        return
     vcur = state.vcur
     peer = state.peer
     peer_ok = bool(peer and peer.state.healthy)
@@ -356,6 +386,8 @@ async def _dispatch_mouse_move(dx: float, dy: float) -> None:
 
 
 async def _dispatch_mouse_click(button: str) -> None:
+    if not _ax_allows_synthetic_input():
+        return
     vcur = state.vcur
     peer = state.peer
     if vcur and vcur.host == "pc" and peer and peer.state.healthy:
@@ -365,6 +397,8 @@ async def _dispatch_mouse_click(button: str) -> None:
 
 
 async def _dispatch_mouse_scroll(dx: float, dy: float) -> None:
+    if not _ax_allows_synthetic_input():
+        return
     vcur = state.vcur
     peer = state.peer
     if vcur and vcur.host == "pc" and peer and peer.state.healthy:
@@ -377,68 +411,115 @@ async def _dispatch_mouse_scroll(dx: float, dy: float) -> None:
 
 
 async def handle_hold_start() -> None:
+    """Phone began holding — make sure the target Cursor window's chat
+    input is focused so by the time the user releases and we paste,
+    keystrokes land in the right place. Audio is streamed from the
+    phone as WebSocket binary frames; we just reset the buffer here."""
     state.hold_start_ts = time.monotonic()
+    state.audio_buffer = bytearray()
     win = state.selected_window()
     if win is None:
-        # No window selected — still fire the modifier so Wispr
-        # works regardless of focus state.
-        right_option_down()
         return
-
-    if win["host"] == "pc" and state.peer and state.peer.state.healthy:
-        await state.peer.hold_start(title=win["title"])
-    else:
-        focus_window(win["title"])
-        # Give the WM a beat before pressing Right Option so Wispr
-        # activates against the intended window.
-        await asyncio.sleep(0.08)
-        right_option_down()
+    await _focus_selected(win)
 
 
 async def handle_hold_end() -> None:
+    """Phone released — take the accumulated audio blob, send it to
+    Whisper, and broadcast the transcript back so the phone can show
+    its editable preview."""
+    audio = bytes(state.audio_buffer)
+    state.audio_buffer = bytearray()
+
+    if not audio:
+        await broadcast({"type": "final_transcript", "text": ""})
+        return
+
+    try:
+        text = await transcribe_m4a(audio)
+    except TranscriptionError as exc:
+        print(f"[transcribe] {exc}")
+        await broadcast({"type": "transcribe_error", "message": str(exc)})
+        return
+    except Exception as exc:
+        print(f"[transcribe] unexpected: {exc}")
+        await broadcast(
+            {"type": "transcribe_error", "message": f"Unexpected error: {exc}"}
+        )
+        return
+
+    print(f"[transcribe] {len(audio)} bytes -> {len(text)} chars")
+    await broadcast({"type": "final_transcript", "text": text})
+
+
+async def handle_submit(text: str) -> None:
+    """Phone tapped Send with the reviewed text. Paste it into whatever
+    input is currently focused inside the selected window, then
+    submit / queue."""
+    text = (text or "").strip()
+    if not text:
+        print("[submit] empty text, skipping")
+        return
+
     win = state.selected_window()
-    on_pc = bool(
-        win and win["host"] == "pc" and state.peer and state.peer.state.healthy
-    )
+    if win is None:
+        print("[submit] no window selected, skipping")
+        return
+
+    on_pc = win["host"] == "pc" and state.peer and state.peer.state.healthy
+
+    if not on_pc and not _ax_allows_synthetic_input():
+        await broadcast(
+            {
+                "type": "action_blocked",
+                "action": "submit",
+                "reason": "accessibility",
+            }
+        )
+        return
 
     if on_pc:
-        auto_submitted = await state.peer.hold_end()  # type: ignore[union-attr]
+        await state.peer.focus_window(win["title"])  # type: ignore[union-attr]
+        await asyncio.sleep(_FOCUS_SETTLE_DELAY_S)
+        await state.peer.type_string(text)  # type: ignore[union-attr]
+        await asyncio.sleep(0.05)
+        if QUEUE_INSTEAD_OF_INTERRUPT:
+            await state.peer.submit()  # type: ignore[union-attr]
+        else:
+            await state.peer.press_enter()  # type: ignore[union-attr]
     else:
-        right_option_up()
-        release_ts = time.monotonic()
-        hold_duration = (
-            release_ts - state.hold_start_ts if state.hold_start_ts else 0.0
-        )
-        await asyncio.to_thread(
-            state.watcher.wait_for_typing_to_settle,
-            release_ts,
-            hold_duration,
-        )
-        auto_submitted = state.watcher.saw_return_since(release_ts)
+        focus_window(win["title"])
+        await asyncio.sleep(_FOCUS_SETTLE_DELAY_S)
+        await asyncio.to_thread(paste_text, text)
+        await asyncio.sleep(0.08)
+        if QUEUE_INSTEAD_OF_INTERRUPT:
+            press_option_enter()
+        else:
+            press_enter()
 
-    await broadcast(
-        {
-            "type": "transcription_ready",
-            "auto_submitted": auto_submitted,
-        }
+    print(
+        f"[submit] [{win['host']}] {win['project']!r} "
+        f"chars={len(text)} queue={QUEUE_INSTEAD_OF_INTERRUPT}"
     )
-
-
-async def handle_submit() -> None:
-    win = state.selected_window()
-    if win and win["host"] == "pc" and state.peer and state.peer.state.healthy:
-        await state.peer.submit()
-        return
-    if QUEUE_INSTEAD_OF_INTERRUPT:
-        press_option_enter()
-    else:
-        press_enter()
+    await broadcast({"type": "submit_ack"})
 
 
 async def handle_delete() -> None:
+    """Best-effort Cmd+Z on Mac (or peer.delete() on PC). The phone's
+    new editor has its own X that clears the textarea locally without
+    ever hitting the Mac; this handler stays for backwards-compat with
+    any older phone client and as a manual 'undo' escape hatch."""
     win = state.selected_window()
     if win and win["host"] == "pc" and state.peer and state.peer.state.healthy:
         await state.peer.delete()
+        return
+    if not _ax_allows_synthetic_input():
+        await broadcast(
+            {
+                "type": "action_blocked",
+                "action": "delete",
+                "reason": "accessibility",
+            }
+        )
         return
     press_cmd_z()
 
@@ -467,17 +548,20 @@ async def handle_preset(preset_id: str) -> None:
 
     on_pc = win["host"] == "pc" and state.peer and state.peer.state.healthy
 
+    if not on_pc and not _ax_allows_synthetic_input():
+        await broadcast(
+            {
+                "type": "action_blocked",
+                "action": "preset",
+                "reason": "accessibility",
+                "id": preset_id,
+            }
+        )
+        return
+
     if on_pc:
         await state.peer.focus_window(win["title"])  # type: ignore[union-attr]
-        await asyncio.sleep(0.12)
-        # Chat-focus before typing so the preset goes into the chat
-        # input, not the code editor (which frequently has focus).
-        if _AUTO_FOCUS_CHAT:
-            try:
-                await state.peer.focus_chat_input()  # type: ignore[union-attr]
-                await asyncio.sleep(0.05)
-            except Exception as exc:
-                print(f"[preset] chat-focus failed: {exc}")
+        await asyncio.sleep(_FOCUS_SETTLE_DELAY_S)
         await state.peer.type_string(preset.text)  # type: ignore[union-attr]
         await asyncio.sleep(0.05)
         if preset.submit == "queue":
@@ -487,13 +571,7 @@ async def handle_preset(preset_id: str) -> None:
     else:
         focus_window(win["title"])
         # Let the WM actually transfer focus before we start firing keys.
-        await asyncio.sleep(0.12)
-        if _AUTO_FOCUS_CHAT:
-            try:
-                await asyncio.to_thread(press_cmd_l)
-                await asyncio.sleep(0.05)
-            except Exception as exc:
-                print(f"[preset] chat-focus failed: {exc}")
+        await asyncio.sleep(_FOCUS_SETTLE_DELAY_S)
         # Typing is blocking (~4ms per char × message length). Run in a
         # worker thread so the event loop stays responsive and other
         # clients (or another preset tap) don't queue up behind it.
@@ -524,39 +602,14 @@ async def handle_preset(preset_id: str) -> None:
 
 
 async def _focus_selected(win: dict) -> None:
-    """Focus a window, routing to the correct host, then fire
-    Cursor's "focus chat input" hotkey (Cmd+L / Ctrl+L) so the
-    phone's swipe lands on a ready-to-dictate text field.
-
-    Why the sleep between the two steps: ``focus_window`` raises the
-    Cursor window, but macOS / Windows propagate the frontmost-app
-    change asynchronously. Without a brief wait, the hotkey can
-    race ahead and go to whatever was frontmost BEFORE Cursor
-    (e.g. Safari, where Cmd+L opens the address bar — obviously
-    not what anyone wants). 120ms is enough on every machine I've
-    tested and still feels instant.
-
-    Disable by setting ``HC_AUTO_FOCUS_CHAT=0`` in the environment.
-    """
+    """Focus a window, routing to the correct host. We intentionally do
+    NOT try to auto-select Cursor's chat box; the phone UI now exposes
+    a permanent trackpad so the user can click the exact field they
+    want without us toggling sidebars behind their back."""
     if win["host"] == "pc" and state.peer and state.peer.state.healthy:
         await state.peer.focus_window(win["title"])
     else:
         focus_window(win["title"])
-
-    if not _AUTO_FOCUS_CHAT:
-        return
-
-    await asyncio.sleep(_AUTO_FOCUS_CHAT_DELAY_S)
-    try:
-        if win["host"] == "pc" and state.peer and state.peer.state.healthy:
-            await state.peer.focus_chat_input()
-        else:
-            await asyncio.to_thread(press_cmd_l)
-    except Exception as exc:
-        # Never let a stray focus-hotkey failure swallow the whole
-        # swipe — the window is already focused, which is most of
-        # what the user wanted.
-        print(f"[focus] chat-input hotkey failed: {exc}")
 
 
 async def handle_select(index: int) -> None:
@@ -649,8 +702,6 @@ def _init_virtual_cursor(mac_w: int, mac_h: int) -> VirtualCursor:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    state.watcher.start()
-
     mac_w, mac_h = _mac_screen_size()
     state.peer = Peer.from_env(on_windows_change=_on_peer_windows_change)
     if state.peer:
@@ -675,11 +726,43 @@ async def lifespan(_: FastAPI):
 
     task = asyncio.create_task(poll_windows())
     layout_task = asyncio.create_task(_refresh_layout())
+    relay_task: Optional[asyncio.Task] = None
+    relay_url = os.environ.get("BLIND_RELAY_URL", "").strip()
+    supabase_for_relay = os.environ.get("BLIND_SUPABASE_ACCESS_TOKEN", "").strip()
+    legacy_token = os.environ.get("BLIND_RELAY_TOKEN", "").strip()
+    relay_token = supabase_for_relay or legacy_token
+    if supabase_for_relay:
+        relay_device_id = (os.environ.get("BLIND_DEVICE_ID") or "account").strip() or "account"
+    else:
+        relay_device_id = os.environ.get("BLIND_DEVICE_ID", "").strip()
+    if relay_url and relay_token and (supabase_for_relay or relay_device_id):
+        mint_session = bool(supabase_for_relay)
+        relay_task = asyncio.create_task(
+            connect_relay_forever(
+                relay_url=relay_url,
+                device_id=relay_device_id,
+                token=relay_token,
+                mint_relay_session=mint_session,
+                on_connect=_relay_connected,
+                on_packet=_process_client_packet,
+                on_disconnect=_relay_disconnected,
+            )
+        )
+    elif relay_url and not relay_token:
+        print("[relay] Set BLIND_SUPABASE_ACCESS_TOKEN (account) or BLIND_RELAY_TOKEN (dev) to use the relay.")
+    elif relay_token and not relay_url and (supabase_for_relay or legacy_token):
+        print(
+            "[relay] Set BLIND_RELAY_URL (and for dev pairing also BLIND_DEVICE_ID) to reach the public relay."
+        )
+    elif relay_url and (supabase_for_relay or legacy_token) and not supabase_for_relay and not relay_device_id:
+        print("[relay] Set BLIND_DEVICE_ID for dev relay pairing, or use BLIND_SUPABASE_ACCESS_TOKEN for account mode.")
     try:
         yield
     finally:
         task.cancel()
         layout_task.cancel()
+        if relay_task:
+            relay_task.cancel()
         if state.peer:
             await state.peer.stop()
 
@@ -689,12 +772,36 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> FileResponse:
-    return FileResponse(PHONE_DIR / "index.html")
+    return FileResponse(
+        PHONE_DIR / "index.html",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/manifest.json")
 async def manifest() -> FileResponse:
     return FileResponse(PHONE_DIR / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/config.js")
+async def config_js() -> HTMLResponse:
+    config = {
+        "supabaseUrl": os.environ.get("SUPABASE_URL", "").strip(),
+        "supabaseAnonKey": os.environ.get("SUPABASE_ANON_KEY", "").strip(),
+        "relayUrl": os.environ.get("BLIND_RELAY_URL", "").strip(),
+    }
+    config["accountPairing"] = bool(
+        config["supabaseUrl"] and config["supabaseAnonKey"] and config["relayUrl"]
+    )
+    return HTMLResponse(
+        "window.BLIND_MONKEY_CONFIG = " + json.dumps(config) + ";\n",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/apple-touch-icon.png")
@@ -770,7 +877,7 @@ _INSTALL_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#000000">
-  <title>Install Hand Control cert</title>
+  <title>Install Blind Monkey cert</title>
   <style>
     :root {
       --bg: #000;
@@ -824,7 +931,7 @@ _INSTALL_HTML = """<!doctype html>
   </style>
 </head>
 <body>
-  <h1>Install Hand Control certificate</h1>
+  <h1>Install Blind Monkey certificate</h1>
   <p class="lede">
     One-time setup so Safari stops showing a "Not Private" warning
     every time you open the remote.
@@ -841,14 +948,14 @@ _INSTALL_HTML = """<!doctype html>
       <li>Open <b>Settings</b> → at the top you'll see
         <b>Profile Downloaded</b>. Tap it.
         (If it's not there: <b>Settings → General → VPN &amp; Device
-        Management</b> → <b>Hand Control</b>.)</li>
+        Management</b> → <b>Blind Monkey</b>.)</li>
       <li>Tap <b>Install</b> in the top-right, enter your passcode,
         tap <b>Install</b> again when it warns about the profile
         being unverified, and <b>Done</b>.</li>
       <li>Go to <b>Settings → General → About → Certificate Trust
         Settings</b>. Under "Enable full trust for root certificates",
-        toggle <b>Hand Control</b> <b>on</b>. Confirm.</li>
-      <li>Reload the Hand Control tab in Safari. No more warning.</li>
+        toggle <b>Blind Monkey</b> <b>on</b>. Confirm.</li>
+      <li>Reload the Blind Monkey tab in Safari. No more warning.</li>
     </ol>
   </div>
 
@@ -901,6 +1008,40 @@ async def presets_endpoint() -> dict:
     }
 
 
+@app.get("/health")
+async def health_endpoint() -> dict:
+    """Small status endpoint for the native Mac companion UI."""
+    ax = _check_accessibility()
+    err = last_list_error()
+    return {
+        "ok": True,
+        "accessibility": {"trusted": ax},
+        "process": {
+            "python": sys.executable,
+        },
+        "windows_count": len(state._all_windows()),
+        "list_windows_error": err,
+        "accessibility_hint": None
+        if ax
+        else (
+            f"System Settings → Privacy & Security → Accessibility: enable this "
+            f"Python ({sys.executable}), and Blind Monkey if shown. Then restart the server."
+        ),
+        "relay": {
+            "configured": bool(
+                os.environ.get("BLIND_RELAY_URL", "").strip()
+                and (
+                    os.environ.get("BLIND_SUPABASE_ACCESS_TOKEN", "").strip()
+                    or (
+                        os.environ.get("BLIND_DEVICE_ID", "").strip()
+                        and os.environ.get("BLIND_RELAY_TOKEN", "").strip()
+                    )
+                )
+            ),
+        },
+    }
+
+
 app.mount("/static", StaticFiles(directory=str(PHONE_DIR)), name="static")
 
 
@@ -909,61 +1050,95 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
     state.clients.add(websocket)
     try:
-        await websocket.send_text(json.dumps(state.to_payload()))
+        await _send_to_client(websocket, state.to_payload())
         while True:
-            raw = await websocket.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            kind = msg.get("type")
-            if kind == "hold_start":
-                await handle_hold_start()
-            elif kind == "hold_end":
-                await handle_hold_end()
-            elif kind == "submit":
-                await handle_submit()
-            elif kind == "delete":
-                await handle_delete()
-            elif kind == "switch_prev":
-                await handle_switch(-1)
-            elif kind == "switch_next":
-                await handle_switch(+1)
-            elif kind == "select":
-                idx = msg.get("index")
-                if isinstance(idx, int):
-                    await handle_select(idx)
-            elif kind == "preset":
-                pid = msg.get("id")
-                if isinstance(pid, str):
-                    await handle_preset(pid)
-            elif kind == "mouse_move":
-                dx = msg.get("dx")
-                dy = msg.get("dy")
-                if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
-                    await _dispatch_mouse_move(float(dx), float(dy))
-            elif kind == "mouse_click":
-                btn = msg.get("button")
-                if btn in ("left", "right"):
-                    await _dispatch_mouse_click(btn)
-            elif kind == "mouse_scroll":
-                dx = msg.get("dx") or 0
-                dy = msg.get("dy") or 0
-                if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
-                    await _dispatch_mouse_scroll(float(dx), float(dy))
-            elif kind == "ping":
-                await websocket.send_text(json.dumps({"type": "pong"}))
+            # receive() returns either {"text": "..."} or {"bytes": b"..."}
+            # depending on the frame type. Phones send JSON control
+            # messages as text and audio chunks as binary.
+            packet = await websocket.receive()
+            if packet.get("type") == "websocket.disconnect":
+                break
+            await _process_client_packet(websocket, packet)
     except WebSocketDisconnect:
         pass
     except Exception as exc:
         print(f"[ws] error: {exc}")
     finally:
         state.clients.discard(websocket)
-        # Safety: if the phone disconnects mid-hold, release the modifier.
-        try:
-            right_option_up()
-        except Exception:
-            pass
+
+
+async def _process_client_packet(client: object, packet: dict) -> None:
+    if "bytes" in packet and packet["bytes"] is not None:
+        chunk = packet["bytes"]
+        if chunk:
+            state.audio_buffer.extend(chunk)
+        return
+
+    raw = packet.get("text")
+    if raw is None:
+        return
+    try:
+        msg = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    await _handle_client_message(client, msg)
+
+
+async def _handle_client_message(client: object, msg: dict) -> None:
+    kind = msg.get("type")
+    if kind == "hold_start":
+        await handle_hold_start()
+    elif kind == "hold_end":
+        await handle_hold_end()
+    elif kind == "submit":
+        text = msg.get("text")
+        if isinstance(text, str):
+            await handle_submit(text)
+    elif kind == "cancel":
+        state.audio_buffer = bytearray()
+        state.hold_start_ts = None
+        print("[ws] cancel")
+    elif kind == "delete":
+        await handle_delete()
+    elif kind == "switch_prev":
+        await handle_switch(-1)
+    elif kind == "switch_next":
+        await handle_switch(+1)
+    elif kind == "select":
+        idx = msg.get("index")
+        if isinstance(idx, int):
+            await handle_select(idx)
+    elif kind == "preset":
+        pid = msg.get("id")
+        if isinstance(pid, str):
+            await handle_preset(pid)
+    elif kind == "mouse_move":
+        dx = msg.get("dx")
+        dy = msg.get("dy")
+        if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
+            await _dispatch_mouse_move(float(dx), float(dy))
+    elif kind == "mouse_click":
+        btn = msg.get("button")
+        if btn in ("left", "right"):
+            await _dispatch_mouse_click(btn)
+    elif kind == "mouse_scroll":
+        dx = msg.get("dx") or 0
+        dy = msg.get("dy") or 0
+        if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
+            await _dispatch_mouse_scroll(float(dx), float(dy))
+    elif kind == "ping":
+        await _send_to_client(client, {"type": "pong"})
+    elif kind == "request_state":
+        await _send_to_client(client, state.to_payload())
+
+
+async def _relay_connected(client: RelayClientConnection) -> None:
+    state.clients.add(client)
+    await _send_to_client(client, state.to_payload())
+
+
+async def _relay_disconnected(client: RelayClientConnection) -> None:
+    state.clients.discard(client)
 
 
 def get_lan_ip() -> str:
@@ -1001,12 +1176,42 @@ def get_mdns_hostname() -> Optional[str]:
     return None
 
 
-def _check_accessibility() -> bool:
+def _check_accessibility(prompt: bool = False) -> bool:
     try:
+        if prompt:
+            from ApplicationServices import (  # type: ignore
+                AXIsProcessTrustedWithOptions,
+                kAXTrustedCheckOptionPrompt,
+            )
+
+            options = {
+                kAXTrustedCheckOptionPrompt.takeUnretainedValue(): True,
+            }
+            return bool(AXIsProcessTrustedWithOptions(options))
+
         from ApplicationServices import AXIsProcessTrusted  # type: ignore
+
         return bool(AXIsProcessTrusted())
     except Exception:
         return False
+
+
+def _ax_allows_synthetic_input() -> bool:
+    """CoreGraphics/AppleScript input works only for Accessibility-trusted
+    processes. Throttle stderr so a dragging finger on the phone does not
+    flood the log.
+    """
+    global _last_ax_input_warn
+    if _check_accessibility():
+        return True
+    now = time.monotonic()
+    if now - _last_ax_input_warn >= _AX_INPUT_LOG_INTERVAL_S:
+        _last_ax_input_warn = now
+        print(
+            f"[tcc] Synthetic input ignored — enable this binary in System Settings"
+            f" → Privacy & Security → Accessibility: {sys.executable}"
+        )
+    return False
 
 
 def _resolve_port() -> int:
@@ -1045,14 +1250,18 @@ def main() -> None:
     if _port_in_use(port):
         sys.stderr.write(
             f"\nPort {port} is already in use.\n"
-            f"  • If Hand Control is already running, just use that instance.\n"
+            f"  • If Blind Monkey is already running, just use that instance.\n"
             f"  • Otherwise run on another port:  PORT=8080 ./run.sh\n\n"
         )
         sys.exit(1)
 
     ip = get_lan_ip()
     hostname = get_mdns_hostname()
-    trusted = _check_accessibility()
+    ts_dns, ts_ips = get_tailscale_sans()
+    trusted = _check_accessibility(
+        prompt=os.environ.get("BLIND_PROMPT_ACCESSIBILITY", "").lower()
+        in {"1", "true", "yes"}
+    )
 
     # Generate (or reuse) a self-signed TLS cert. We use HTTPS so
     # the phone PWA runs in a "secure context" (required for reliable
@@ -1070,7 +1279,7 @@ def main() -> None:
     scheme = "https" if use_https else "http"
 
     print("\n" + "=" * 64)
-    print("  Hand Control running.")
+    print("  Blind Monkey running.")
     print()
     if hostname:
         print(f"  Phone URL (stable):  {scheme}://{hostname}:{port}")
@@ -1080,14 +1289,33 @@ def main() -> None:
         print(f"  hostname won't change when your Wi-Fi does.")
     else:
         print(f"  Phone URL:  {scheme}://{ip}:{port}")
+    if ts_dns or ts_ips:
+        print()
+        print("  Tailscale (same phone, any network):")
+        for h in ts_dns:
+            print(f"    {scheme}://{h}:{port}")
+        for tip in ts_ips:
+            if tip.startswith("100."):
+                print(f"    {scheme}://{tip}:{port}")
+        print("    Start Tailscale on this Mac (`tailscale up`) and on your")
+        print("    phone. Trust the cert once per hostname — visit /install")
+        print("    using the Tailscale URL if Safari warns.")
     print("=" * 64)
     if trusted:
-        print("  Accessibility: OK (precise Enter timing enabled)")
+        print("  Accessibility: OK")
     else:
-        print("  Accessibility: NOT GRANTED")
+        print("  Accessibility: NOT GRANTED (this exact process is untrusted).")
+        print(f"  → Python: {sys.executable}")
         print("  → System Settings → Privacy & Security → Accessibility")
-        print("    Enable your terminal app, then restart this server.")
-        print("  Using hold-duration heuristic for Enter timing until then.")
+        print("    Enable Blind Monkey, and the Python at the path above, then")
+        print("    restart this server. (The menu-bar app is not the same process.)")
+    if os.environ.get("OPENAI_API_KEY", "").strip():
+        model = os.environ.get("HC_TRANSCRIBE_MODEL", "whisper-1").strip() or "whisper-1"
+        print(f"  OpenAI:        OK (transcription model: {model})")
+    else:
+        print("  OpenAI:        NO KEY — phone dictation will fail.")
+        print("    Add OPENAI_API_KEY to ~/.hand-control.env or export it,")
+        print("    then restart. (Other features work without it.)")
     if use_https:
         # Compose a pointer to /install using the stable hostname when
         # we have one, or the raw IP otherwise.
@@ -1096,6 +1324,9 @@ def main() -> None:
         print("=" * 64)
         print("  ONE-TIME SETUP — kill the 'Not Private' warning:")
         print(f"    Visit on your phone:  {install_url}")
+        if ts_dns:
+            ts_install = f"{scheme}://{ts_dns[0]}:{port}/install"
+            print(f"    (Tailscale: same steps at  {ts_install} )")
         print("    Follow the 4-step install (takes ~45 seconds).")
         print("    After that Safari trusts the site permanently —")
         print("    no more warnings on every launch.")
@@ -1110,9 +1341,54 @@ def main() -> None:
     # terminal and tap the notification that pops up — beats typing a
     # ``.local`` URL into Safari, especially on iOS where there's no
     # history-based autocomplete for ``.local`` hosts.
-    phone_url = (
-        f"{scheme}://{hostname}:{port}" if hostname else f"{scheme}://{ip}:{port}"
+    #
+    # HC_QR_HOST=my-mac.local            — force QR to a specific host
+    # HC_QR_USE_TAILSCALE=1             — dev fallback for direct Tailscale testing
+    # BLIND_RELAY_URL / BLIND_DEVICE_ID / BLIND_RELAY_TOKEN append relay config
+    qr_override = os.environ.get("HC_QR_HOST", "").strip().rstrip(".")
+    phone_app_url = os.environ.get("BLIND_PHONE_APP_URL", "").strip()
+    relay_url = os.environ.get("BLIND_RELAY_URL", "").strip()
+    relay_device_id = os.environ.get("BLIND_DEVICE_ID", "").strip()
+    relay_token = os.environ.get("BLIND_RELAY_TOKEN", "").strip()
+    account_pairing = bool(
+        os.environ.get("SUPABASE_URL", "").strip()
+        and os.environ.get("SUPABASE_ANON_KEY", "").strip()
+        and relay_url
     )
+    prefer_ts = os.environ.get("HC_QR_USE_TAILSCALE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if qr_override:
+        phone_url = f"{scheme}://{qr_override}:{port}"
+    elif account_pairing and phone_app_url:
+        phone_url = phone_app_url
+    elif relay_url and relay_device_id and relay_token and phone_app_url:
+        phone_url = phone_app_url
+    elif prefer_ts and ts_dns:
+        phone_url = f"{scheme}://{ts_dns[0]}:{port}"
+    elif hostname:
+        phone_url = f"{scheme}://{hostname}:{port}"
+    else:
+        phone_url = f"{scheme}://{ip}:{port}"
+    if relay_url and relay_device_id and relay_token and not account_pairing:
+        parts = urlsplit(phone_url)
+        query = [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key not in {"relay", "device", "token"}
+        ]
+        query.extend(
+            [
+                ("relay", relay_url),
+                ("device", relay_device_id),
+                ("token", relay_token),
+            ]
+        )
+        phone_url = urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+        )
     try:
         import qrcode  # type: ignore
 

@@ -19,8 +19,8 @@ is the hub, and it forwards events here over HTTP.
 Clone the full Hand Control repo somewhere on the PC:
 
 ```
-git clone https://github.com/<your-fork>/hand-control
-cd hand-control
+git clone https://github.com/spdoub/cursor-hand-control.git
+cd cursor-hand-control
 ```
 
 All the Windows-specific code lives in `peer\`.
@@ -44,7 +44,7 @@ whatever key you picked.
 Double-click `peer\run.bat` — or from a terminal:
 
 ```
-cd hand-control
+cd cursor-hand-control
 peer\run.bat
 ```
 

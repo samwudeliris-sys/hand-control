@@ -1,7 +1,7 @@
 {
-  "name": "Hand Control",
-  "short_name": "Hand Control",
-  "description": "Phone remote for dictating into multiple Cursor windows",
+  "name": "Blind Monkey",
+  "short_name": "Blind Monkey",
+  "description": "Voice and touch remote for dictating into Cursor from your phone",
   "start_url": "/",
   "scope": "/",
   "display": "fullscreen",
