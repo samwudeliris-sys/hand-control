@@ -3,3 +3,6 @@ contact_links:
   - name: Troubleshooting (README)
     url: https://github.com/spdoub/cursor-hand-control#troubleshooting
     about: Install, Wi‑Fi, Tailscale, cert trust, and common fixes are documented here first.
+  - name: Community discussions
+    url: https://github.com/spdoub/cursor-hand-control/discussions
+    about: Questions and ideas that are not clearly a bug or feature request.
